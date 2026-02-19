@@ -2,8 +2,9 @@
 
 ## 📁 Localização do Certificado
 
-**Arquivo:** `CertificadoDigitalA12025GabrielSalehServicos1.pfx`  
-**Caminho:** `c:\Users\Admin\Downloads\CertificadoDigitalA12025GabrielSalehServicos1.pfx`
+**Arquivo:** `CertificadoDigitalA12026GabrielSalehServicosMedicos.pfx`  
+**Caminho:** `C:\Projeto 2\CertificadoDigitalA12026GabrielSalehServicosMedicos.pfx`  
+**PEM extraído:** `certificados/cert.pem` e `certificados/key.pem`
 
 ---
 
@@ -12,8 +13,8 @@
 ### Arquivo `.env` criado com:
 
 ```env
-CERTIFICATE_PATH="c:\\Users\\Admin\\Downloads\\CertificadoDigitalA12025GabrielSalehServicos1.pfx"
-CERTIFICATE_PASSWORD="SUBSTITUA_PELA_SENHA_REAL_DO_CERTIFICADO"
+CERTIFICATE_PATH="certificados/cert.pem"
+CERTIFICATE_PASSWORD="123456"
 ```
 
 ---
