@@ -108,9 +108,11 @@ Acompanhe os logs no painel do Railway:
 - Verifique se CERTIFICATE_CERT_PEM e CERTIFICATE_KEY_PEM estão em Base64 válido
 - Confirme que não há quebras de linha no Base64
 
-**Porta em uso:**
-- Railway define a porta automaticamente via $PORT
-- Não defina porta fixa no código
+**Porta em uso / conflito entre serviços:**
+- Railway atribui dinamicamente um `PORT` para cada *service*; aplicações devem sempre usar `$PORT` em produção.
+- Se dois processos estiverem rodando no mesmo *service/container*, haverá conflito — coloque cada app em um *service* separado no Railway.
+- Para desenvolvimento local ou para executar um app em porta diferente, defina `STREAMLIT_SERVER_PORT` (ex.: `8502`) no `.env`; `start.sh` e `railway_start.py` usarão esse valor quando `$PORT` não estiver definido.
+- Evite fixar `PORT` em produção — deixe o Railway gerenciar.
 
 **Histórico de notas sumindo:**
 - Configure um volume persistente em Settings > Volumes

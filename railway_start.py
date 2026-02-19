@@ -6,9 +6,10 @@ import sys
 
 print("🚀 Iniciando NFS-e Automation System...")
 
-# Get PORT from environment
-port = os.environ.get("PORT", "8501")
-print(f"PORT={port}")
+# Get PORT from environment (Railway sets PORT in production).
+# If PORT is not set (local dev), allow STREAMLIT_SERVER_PORT as fallback.
+port = os.environ.get("PORT") or os.environ.get("STREAMLIT_SERVER_PORT") or "8501"
+print(f"PORT={port} (from PORT or STREAMLIT_SERVER_PORT)")
 
 # Run certificate initialization
 print("📜 Inicializando certificados...")
