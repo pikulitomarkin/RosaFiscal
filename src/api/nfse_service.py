@@ -2,9 +2,12 @@
 Serviço de integração com API Nacional NFS-e (ADN).
 """
 import asyncio
+import re
 from typing import List, Dict, Any, Optional
 from datetime import datetime, date
 from decimal import Decimal
+
+import httpx
 
 from src.api.client import NFSeAPIClient
 from src.models.schemas import (
@@ -15,6 +18,13 @@ from src.models.schemas import (
 from src.utils.logger import app_logger
 from src.utils.xml_generator import NFSeXMLGenerator
 from config.settings import settings
+
+# Tratamento E0014 (DPS já existente)
+CODIGO_E0014 = "E0014"
+DELAY_ENTRE_EMISSOES_SEG = 2
+DELAY_RETRY_E0014_SEG = 5
+MAX_TENTATIVAS_POR_NOTA = 3
+REGEX_ID_DPS = re.compile(r"DPS\d{44}")
 
 
 class NFSeService:
@@ -67,6 +77,189 @@ class NFSeService:
             "telefone": "1140041234"
         }
     
+    def _extrair_id_dps_do_erro(self, response_body: Any) -> Optional[str]:
+        """Extrai idDPS do corpo de resposta de erro (E0014)."""
+        if response_body is None:
+            return None
+        if isinstance(response_body, dict):
+            for key in ("idDps", "idDPS", "id_dps"):
+                if key in response_body and response_body[key]:
+                    return str(response_body[key]).strip()
+            for key in ("detail", "mensagem", "message", "descricao"):
+                if key in response_body and response_body[key]:
+                    match = REGEX_ID_DPS.search(str(response_body[key]))
+                    if match:
+                        return match.group(0)
+            if "errors" in response_body and isinstance(response_body["errors"], list):
+                for err in response_body["errors"]:
+                    if isinstance(err, dict):
+                        found = self._extrair_id_dps_do_erro(err)
+                        if found:
+                            return found
+            if "erros" in response_body and isinstance(response_body["erros"], list):
+                for err in response_body["erros"]:
+                    if isinstance(err, dict):
+                        found = self._extrair_id_dps_do_erro(err)
+                        if found:
+                            return found
+        if isinstance(response_body, str):
+            match = REGEX_ID_DPS.search(response_body)
+            if match:
+                return match.group(0)
+        return None
+
+    def _erro_e0014(self, response_body: Any) -> bool:
+        """Verifica se o erro é E0014 (DPS já existente)."""
+        if response_body is None:
+            return False
+        if isinstance(response_body, dict):
+            cod = response_body.get("codigo") or response_body.get("Codigo") or response_body.get("code")
+            if cod and str(cod).strip().upper() == CODIGO_E0014:
+                return True
+            for lst in ("errors", "erros", "Erros"):
+                if lst in response_body and isinstance(response_body[lst], list):
+                    for item in response_body[lst]:
+                        if isinstance(item, dict) and (item.get("Codigo") or item.get("codigo")) == CODIGO_E0014:
+                            return True
+        return False
+
+    async def _emitir_uma_nfse_com_retry_e0014(
+        self,
+        registro: Dict[str, str],
+        config_servico: Dict[str, Any],
+        callback_progress: Optional[callable],
+        total: int,
+        progress_offset: int,
+    ) -> ProcessingResult:
+        """
+        Emite uma NFS-e com throttling, tratamento E0014 (consulta por idDPS e retry) e log detalhado.
+        """
+        nfse_request = self._build_nfse_request(registro, config_servico)
+        xml_comprimido = self.xml_generator.gerar_lote_comprimido_assinado([nfse_request])
+        dps_b64 = xml_comprimido[0]
+        id_dps_log: Optional[str] = None
+        ultimo_erro: Optional[str] = None
+        resultado_consulta: Optional[str] = None
+        desfecho: Optional[str] = None
+
+        for tentativa in range(1, MAX_TENTATIVAS_POR_NOTA + 1):
+            try:
+                resultado = await self.client.emitir_nfse(dps_b64)
+                chave = resultado.get("chaveAcesso") or resultado.get("chave_acesso")
+                id_dps_log = resultado.get("idDps") or resultado.get("id_dps")
+                desfecho = "emitida com sucesso"
+                app_logger.info(
+                    f"[idDPS={id_dps_log or 'N/A'}] Emitida com sucesso (tentativa {tentativa}). Chave: {chave}"
+                )
+                if callback_progress:
+                    callback_progress(progress_offset + 1, total)
+                return ProcessingResult(
+                    hash_transacao=registro.get("hash", "N/A"),
+                    cpf_tomador=registro.get("cpf", "N/A"),
+                    nome_tomador=registro.get("nome", "N/A"),
+                    status="sucesso",
+                    numero_nfse=chave,
+                    protocolo=resultado.get("idDps"),
+                    mensagem=f"Autorizado - Chave: {chave}",
+                    timestamp=datetime.now(),
+                )
+            except httpx.HTTPStatusError as e:
+                ultimo_erro = f"HTTP {e.response.status_code}"
+                try:
+                    body = e.response.json()
+                except Exception:
+                    body = e.response.text
+                if isinstance(body, str):
+                    try:
+                        import json
+                        body = json.loads(body) if body.strip() else {}
+                    except Exception:
+                        pass
+                ultimo_erro = f"HTTP {e.response.status_code}: {body}"
+                if not self._erro_e0014(body):
+                    desfecho = "erro real (não E0014)"
+                    app_logger.error(
+                        f"[hash={registro.get('hash')}] idDPS={id_dps_log or 'N/A'} | erro={ultimo_erro} | desfecho={desfecho}"
+                    )
+                    if callback_progress:
+                        callback_progress(progress_offset + 1, total)
+                    return ProcessingResult(
+                        hash_transacao=registro.get("hash", "N/A"),
+                        cpf_tomador=registro.get("cpf", "N/A"),
+                        nome_tomador=registro.get("nome", "N/A"),
+                        status="erro",
+                        mensagem=str(body) if isinstance(body, dict) else (body or str(e)),
+                        timestamp=datetime.now(),
+                    )
+                id_dps_log = self._extrair_id_dps_do_erro(body) or id_dps_log
+                if not id_dps_log:
+                    m = REGEX_ID_DPS.search(str(body))
+                    id_dps_log = m.group(0) if m else None
+                app_logger.warning(
+                    f"[idDPS={id_dps_log or 'N/A'}] Erro E0014 recebido (tentativa {tentativa}). Consultando se NFS-e existe..."
+                )
+                consulta = None
+                if id_dps_log and id_dps_log.strip():
+                    consulta = await self.client.consultar_nfse_por_id_dps(id_dps_log.strip())
+                if consulta:
+                    resultado_consulta = "NFS-e encontrada"
+                    chave = consulta.get("chaveAcesso") or consulta.get("chave_acesso")
+                    desfecho = "já existia (considerado sucesso)"
+                    app_logger.info(
+                        f"[idDPS={id_dps_log}] Consulta: {resultado_consulta} | desfecho: {desfecho} | chave: {chave}"
+                    )
+                    if callback_progress:
+                        callback_progress(progress_offset + 1, total)
+                    return ProcessingResult(
+                        hash_transacao=registro.get("hash", "N/A"),
+                        cpf_tomador=registro.get("cpf", "N/A"),
+                        nome_tomador=registro.get("nome", "N/A"),
+                        status="sucesso",
+                        numero_nfse=chave,
+                        protocolo=id_dps_log,
+                        mensagem=f"NFS-e já existia (E0014) - Chave: {chave}",
+                        timestamp=datetime.now(),
+                    )
+                resultado_consulta = "NFS-e não encontrada"
+                desfecho = f"reenvio após 5s (tentativa {tentativa}/{MAX_TENTATIVAS_POR_NOTA})"
+                app_logger.info(
+                    f"[idDPS={id_dps_log}] Consulta: {resultado_consulta} | desfecho: {desfecho}"
+                )
+                if tentativa < MAX_TENTATIVAS_POR_NOTA:
+                    await asyncio.sleep(DELAY_RETRY_E0014_SEG)
+                    # Regerar XML para nova tentativa (evita cache)
+                    xml_comprimido = self.xml_generator.gerar_lote_comprimido_assinado([nfse_request])
+                    dps_b64 = xml_comprimido[0]
+            except Exception as e:
+                ultimo_erro = str(e)
+                desfecho = "exceção"
+                app_logger.exception(f"[hash={registro.get('hash')}] idDPS={id_dps_log or 'N/A'} | erro: {e}")
+                if callback_progress:
+                    callback_progress(progress_offset + 1, total)
+                return ProcessingResult(
+                    hash_transacao=registro.get("hash", "N/A"),
+                    cpf_tomador=registro.get("cpf", "N/A"),
+                    nome_tomador=registro.get("nome", "N/A"),
+                    status="erro",
+                    mensagem=ultimo_erro or str(e),
+                    timestamp=datetime.now(),
+                )
+
+        desfecho = "erro após 3 tentativas (E0014 mas NFS-e não encontrada)"
+        app_logger.error(
+            f"[idDPS={id_dps_log or 'N/A'}] Erro recebido: E0014 | Resultado consulta: {resultado_consulta} | Desfecho: {desfecho}"
+        )
+        if callback_progress:
+            callback_progress(progress_offset + 1, total)
+        return ProcessingResult(
+            hash_transacao=registro.get("hash", "N/A"),
+            cpf_tomador=registro.get("cpf", "N/A"),
+            nome_tomador=registro.get("nome", "N/A"),
+            status="erro",
+            mensagem=f"E0014 - NFS-e não encontrada após {MAX_TENTATIVAS_POR_NOTA} tentativas. Requer atenção manual.",
+            timestamp=datetime.now(),
+        )
+
     async def emitir_nfse_lote(
         self,
         registros: List[Dict[str, str]],
@@ -74,84 +267,38 @@ class NFSeService:
         callback_progress: Optional[callable] = None
     ) -> List[ProcessingResult]:
         """
-        Emite NFS-e em lote usando a API ADN.
-        
-        Fluxo:
-        1. Gera XMLs NFS-e para cada registro
-        2. Comprime XMLs em GZIP e codifica em Base64
-        3. Envia lote para API ADN (/adn/DFe)
-        4. Processa resposta individual de cada documento
-        
-        Args:
-            registros: Lista de registros extraídos do PDF
-            config_servico: Configuração do serviço (valor, descrição, etc)
-            callback_progress: Função callback para atualizar progresso
-            
-        Returns:
-            Lista de resultados do processamento
+        Emite NFS-e em lote via API Sefin Nacional (emissão unitária com throttling).
+
+        Para cada registro: delay 2s entre emissões; em caso de E0014, consulta por idDPS;
+        se não existir, aguarda 5s e reenvia (máx 3 tentativas). Log detalhado e relatório final.
         """
         total = len(registros)
-        app_logger.info(f"Iniciando emissão em lote de {total} NFS-e via ADN")
+        app_logger.info(f"Iniciando emissão em lote de {total} NFS-e (Sefin Nacional, throttling {DELAY_ENTRE_EMISSOES_SEG}s)")
         
         results: List[ProcessingResult] = []
         
-        # Processa em lotes de até MAX_BATCH_SIZE (API ADN pode ter limite)
-        max_batch = min(settings.MAX_BATCH_SIZE, 50)  # ADN recomenda lotes menores
+        for idx, registro in enumerate(registros):
+            if idx > 0:
+                await asyncio.sleep(DELAY_ENTRE_EMISSOES_SEG)
+            result = await self._emitir_uma_nfse_com_retry_e0014(
+                registro, config_servico, callback_progress, total, idx
+            )
+            results.append(result)
         
-        for i in range(0, total, max_batch):
-            batch = registros[i:i + max_batch]
-            batch_num = (i // max_batch) + 1
-            
-            app_logger.info(f"Processando lote {batch_num} com {len(batch)} documentos")
-            
-            try:
-                # 1. Monta requisições NFS-e
-                nfse_requests = [
-                    self._build_nfse_request(reg, config_servico) 
-                    for reg in batch
-                ]
-                
-                # 2. Gera XMLs comprimidos e assinados digitalmente
-                lote_xml_comprimido = self.xml_generator.gerar_lote_comprimido_assinado(nfse_requests)
-                
-                # 3. Envia para API ADN
-                response_lote = await self.client.recepcionar_lote(lote_xml_comprimido)
-                
-                # 4. Processa resposta individual
-                batch_results = self._processar_resposta_lote(
-                    response_lote, 
-                    batch, 
-                    i
-                )
-                
-                results.extend(batch_results)
-                
-            except Exception as e:
-                app_logger.error(f"Erro ao processar lote {batch_num}: {e}")
-                
-                # Marca todos como erro
-                for idx, reg in enumerate(batch):
-                    results.append(ProcessingResult(
-                        hash_transacao=reg.get('hash', 'N/A'),
-                        cpf_tomador=reg.get('cpf', 'N/A'),
-                        nome_tomador=reg.get('nome', 'N/A'),
-                        status="erro",
-                        mensagem=f"Erro no lote: {str(e)}"
-                    ))
-            
-            # Callback de progresso
-            if callback_progress:
-                progress = min(i + max_batch, total)
-                callback_progress(progress, total)
-        
-        # Estatísticas
+        # Relatório final
         sucessos = sum(1 for r in results if r.status == "sucesso")
         erros = sum(1 for r in results if r.status == "erro")
         alertas = sum(1 for r in results if r.status == "alerta")
-        
+        requer_atencao = [
+            {"hash": r.hash_transacao, "cpf": r.cpf_tomador, "nome": r.nome_tomador, "mensagem": r.mensagem}
+            for r in results
+            if r.status == "erro" or (r.status == "alerta" and r.mensagem)
+        ]
         app_logger.info(
-            f"Lote ADN concluído: {sucessos} sucessos, {alertas} alertas, "
-            f"{erros} erros de {total} total"
+            f"RELATÓRIO FINAL LOTE: Total processado={total} | Sucesso={sucessos} | Erro real={erros} | Alertas={alertas}"
+        )
+        app_logger.info(
+            f"Notas que precisam de atenção manual ({len(requer_atencao)}): {requer_atencao}"
         )
         
         return results

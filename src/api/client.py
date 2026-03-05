@@ -264,3 +264,38 @@ class NFSeAPIClient(AsyncAPIClient):
         except Exception as e:
             app_logger.error(f"Erro ao recepcionar lote: {e}")
             raise
+
+    async def consultar_nfse_por_id_dps(self, id_dps: str) -> Optional[Dict[str, Any]]:
+        """
+        Consulta se a NFS-e foi gerada a partir do idDPS (verificação de duplicidade E0014).
+
+        Endpoint: GET /SefinNacional/dps/{idDps}
+        Retorna a chave de acesso e dados da NFS-e se existir; None se não existir (404).
+
+        Args:
+            id_dps: Identificador da DPS (ex: DPS420540725941824500018600001000000000008288)
+
+        Returns:
+            Dict com chaveAcesso e demais dados da NFS-e se existir; None se 404.
+        """
+        import re
+        # Garantir formato: id pode vir com ou sem prefixo
+        id_limpo = id_dps.strip()
+        if not re.match(r"^DPS\d{44}$", id_limpo):
+            app_logger.warning(f"idDPS em formato inesperado: {id_limpo}")
+        endpoint = f"/SefinNacional/dps/{id_limpo}"
+        try:
+            response = await self.get(endpoint)
+            response.raise_for_status()
+            resultado = response.json()
+            app_logger.info(f"Consulta idDPS {id_limpo}: NFS-e encontrada - chave {resultado.get('chaveAcesso', 'N/A')}")
+            return resultado
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code == 404:
+                app_logger.info(f"Consulta idDPS {id_limpo}: NFS-e não encontrada (404)")
+                return None
+            app_logger.error(f"Consulta idDPS {id_limpo} falhou: {e.response.status_code} - {e.response.text[:300]}")
+            raise
+        except Exception as e:
+            app_logger.error(f"Erro ao consultar idDPS {id_limpo}: {e}")
+            raise

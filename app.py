@@ -387,12 +387,23 @@ def process_batch(records: List[Dict], config: Dict, filename: str):
     with col1:
         st.metric("Total Processado", len(results))
     with col2:
-        st.metric("Sucessos", sucessos, delta=f"{sucessos/len(results)*100:.1f}%")
+        st.metric("Sucessos", sucessos, delta=f"{sucessos/len(results)*100:.1f}%" if results else "0%")
     with col3:
-        st.metric("Erros", erros)
+        st.metric("Erros (requerem atenção)", erros)
+    
+    # Relatório final: notas que precisam de atenção manual
+    import pandas as pd
+    requer_atencao = [r for r in results if r.status == "erro"]
+    if requer_atencao:
+        st.markdown("#### ⚠️ Notas que precisam de atenção manual")
+        df_atencao = pd.DataFrame([
+            {"Hash": r.hash_transacao, "CPF": r.cpf_tomador, "Nome": r.nome_tomador, "Motivo": r.mensagem or ""}
+            for r in requer_atencao
+        ])
+        st.dataframe(df_atencao, use_container_width=True)
+        st.caption("Detalhes destes itens também estão no log da aplicação (idDPS, consulta, desfecho).")
     
     # Tabela de resultados
-    import pandas as pd
     df = pd.DataFrame([r.model_dump() for r in results])
     
     st.dataframe(df, use_container_width=True)
