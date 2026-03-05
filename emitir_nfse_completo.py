@@ -227,7 +227,19 @@ async def emitir_nfse_com_pdf(
         
     except Exception as e:
         print(f"\n[ERRO] Falha: {e}")
-        return {'sucesso': False, 'erro': str(e)}
+        out = {'sucesso': False, 'erro': str(e), 'mensagem': str(e)}
+        # Incluir body da resposta em erros HTTP para tratamento E0014 no lote
+        try:
+            import httpx
+            if isinstance(e, httpx.HTTPStatusError) and e.response is not None:
+                out['response_status'] = e.response.status_code
+                try:
+                    out['response_body'] = e.response.json()
+                except Exception:
+                    out['response_body'] = e.response.text
+        except Exception:
+            pass
+        return out
 
 
 async def exemplo_emissao():

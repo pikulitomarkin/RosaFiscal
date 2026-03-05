@@ -4,9 +4,11 @@ Agora com funcionalidade de download de XML e PDF!
 """
 import streamlit as st
 import asyncio
+import re
+import time
 from pathlib import Path
 from datetime import datetime
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 import sys
 import os
 import base64
@@ -652,20 +654,75 @@ def render_batch_emission():
                                 sucessos = 0
                                 falhas = 0
                                 
-                                import time
-                                
-                                # Função auxiliar para retry
-                                def emitir_com_retry(prestador_obj, tomador_obj, servico_obj, max_tentativas=3):
-                                    """Tenta emitir NFS-e com retry automático."""
+                                # Constantes para tratamento E0014 (DPS já existente)
+                                CODIGO_E0014 = "E0014"
+                                REGEX_ID_DPS = re.compile(r"DPS\d{44}")
+                                DELAY_ENTRE_EMISSOES = 2   # segundos entre cada nota do lote (throttling)
+                                DELAY_RETRY_E0014 = 5      # segundos antes de reenviar quando E0014 e NFS-e não existe
+                                MAX_TENTATIVAS = 3
+
+                                def _extrair_id_dps(body: Any) -> Optional[str]:
+                                    if not body or not isinstance(body, dict):
+                                        return None
+                                    if body.get("idDPS"):
+                                        return str(body["idDPS"]).strip()
+                                    for lst in ("erros", "Erros", "errors"):
+                                        items = body.get(lst)
+                                        if isinstance(items, list):
+                                            for item in items:
+                                                if isinstance(item, dict) and (item.get("Codigo") or item.get("codigo")) == CODIGO_E0014:
+                                                    if item.get("idDPS"):
+                                                        return str(item["idDPS"]).strip()
+                                                    desc = (item.get("Descricao") or item.get("descricao") or "") + " " + str(body)
+                                                    m = REGEX_ID_DPS.search(desc)
+                                                    if m:
+                                                        return m.group(0)
+                                    m = REGEX_ID_DPS.search(json.dumps(body))
+                                    return m.group(0) if m else None
+
+                                def _eh_erro_e0014(body: Any) -> bool:
+                                    if not body or not isinstance(body, dict):
+                                        return False
+                                    for lst in ("erros", "Erros", "errors"):
+                                        items = body.get(lst)
+                                        if isinstance(items, list):
+                                            for item in items:
+                                                if isinstance(item, dict) and (item.get("Codigo") or item.get("codigo")) == CODIGO_E0014:
+                                                    return True
+                                    return False
+
+                                def emitir_com_retry(prestador_obj, tomador_obj, servico_obj, max_tentativas=MAX_TENTATIVAS):
+                                    """Emite NFS-e com retry e tratamento E0014: consulta idDPS; se existir considera sucesso, senão aguarda 5s e reenvia (até 3x)."""
+                                    ultimo_resultado = None
                                     for tentativa in range(max_tentativas):
-                                        try:
-                                            return asyncio.run(emitir_nfse_com_pdf(prestador_obj, tomador_obj, servico_obj))
-                                        except Exception as e:
+                                        resultado = asyncio.run(emitir_nfse_com_pdf(prestador_obj, tomador_obj, servico_obj))
+                                        ultimo_resultado = resultado
+                                        if resultado.get("sucesso"):
+                                            return resultado
+                                        body = resultado.get("response_body")
+                                        if body and _eh_erro_e0014(body):
+                                            id_dps = _extrair_id_dps(body)
+                                            app_logger.warning(f"E0014 recebido (tentativa {tentativa+1}). idDPS={id_dps}. Consultando se NFS-e já existe...")
+                                            if id_dps:
+                                                try:
+                                                    consulta = asyncio.run(get_nfse_service().client.consultar_nfse_por_id_dps(id_dps))
+                                                    if consulta:
+                                                        chave = consulta.get("chaveAcesso") or consulta.get("chave_acesso")
+                                                        app_logger.info(f"NFS-e já existia (idDPS={id_dps}). Considerado sucesso. Chave: {chave}")
+                                                        return {"sucesso": True, "chave_acesso": chave, "xml_path": None, "pdf_path": None, "resultado": consulta, "numero": None}
+                                                except Exception as ex:
+                                                    app_logger.warning(f"Consulta idDPS falhou: {ex}")
                                             if tentativa < max_tentativas - 1:
-                                                time.sleep(1)  # Aguarda 1 segundo antes de tentar novamente
+                                                app_logger.info(f"NFS-e não encontrada. Aguardando {DELAY_RETRY_E0014}s para reenviar (tentativa {tentativa+1}/{max_tentativas})...")
+                                                time.sleep(DELAY_RETRY_E0014)
                                                 continue
-                                            else:
-                                                raise e
+                                            ultimo_resultado = {**resultado, "mensagem": resultado.get("erro") or resultado.get("mensagem") or "E0014 - NFS-e não encontrada após consulta. Requer atenção manual."}
+                                            return ultimo_resultado
+                                        if tentativa < max_tentativas - 1:
+                                            time.sleep(1)
+                                            continue
+                                        return {**resultado, "mensagem": resultado.get("mensagem") or resultado.get("erro", "Erro desconhecido")}
+                                    return ultimo_resultado or {"sucesso": False, "erro": "Erro após todas as tentativas", "mensagem": "Erro após todas as tentativas"}
                                 
                                 for idx, record in enumerate(records_to_process):
                                     status_text.text(f"⏳ Processando {idx+1}/{len(records_to_process)}: {record.get('nome', 'N/A')}...")
@@ -739,8 +796,8 @@ def render_batch_emission():
                                         resultado = emitir_com_retry(prestador_obj, tomador_obj, servico_obj)
                                         app_logger.info(f"[{idx+1}] Emissão concluída: {resultado.get('sucesso', False)}")
                                         
-                                        # Pequeno delay entre emissões (reduzido para acelerar)
-                                        time.sleep(0.2)
+                                        # Throttling: 2 segundos entre cada emissão (reduz E0014 intermitente)
+                                        time.sleep(DELAY_ENTRE_EMISSOES)
                                         
                                         if resultado['sucesso']:
                                             sucessos += 1
