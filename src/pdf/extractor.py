@@ -21,7 +21,7 @@ class PDFDataExtractor:
         'telefone': r'\b\d{10,11}\b',  # Telefone (10 ou 11 dígitos)
         'hash': r'PACIENTEBLIS\w+',  # Hash do paciente
         'email': r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}',  # Email
-        'valor': r'R\$\s*[\d.]+,\d{2}',  # Valor monetário no formato brasileiro (R$ 1.234,56)
+        'valor': r'R\$\s*[\d.,]+',  # Valor monetário (R$ 65.00, R$ 65,00 ou R$ 1.234,56)
         'data': r'\d{2}/\d{2}/\d{4}',  # Data formato DD/MM/YYYY
     }
     
@@ -178,8 +178,12 @@ class PDFDataExtractor:
                 valor = None
                 if valor_match:
                     valor_str = valor_match.group().replace('R$', '').strip()
-                    # Remove separador de milhar (.) e converte separador decimal (, -> .)
-                    valor_str = valor_str.replace('.', '').replace(',', '.')
+                    if ',' in valor_str:
+                        # Formato brasileiro: R$ 1.234,56 — ponto é milhar, vírgula é decimal
+                        valor_str = valor_str.replace('.', '').replace(',', '.')
+                    else:
+                        # Formato com ponto decimal: R$ 65.00 — apenas remove espaços
+                        valor_str = valor_str.strip()
                     try:
                         valor = float(valor_str)
                     except ValueError:
