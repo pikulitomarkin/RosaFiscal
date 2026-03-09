@@ -516,18 +516,24 @@ def render_batch_emission():
                         # Preparar dataframe para exibição
                         display_data = []
                         for r in valid_records:
+                            valor_pdf = r.get('valor')
                             display_data.append({
                                 'Nome': r.get('nome', 'N/A'),
                                 'CPF': r.get('cpf_formatado', r.get('cpf', 'N/A')),
                                 'Telefone': r.get('telefone', 'Não informado'),
                                 'Email': r.get('email', 'Não informado'),
-                                'Data Consulta': r.get('data_consulta', 'N/A')
+                                'Data Consulta': r.get('data_consulta', 'N/A'),
+                                'Valor (R$)': f"{valor_pdf:.2f}" if valor_pdf else 'Não encontrado'
                             })
                         
                         df = pd.DataFrame(display_data)
                         st.dataframe(df, use_container_width=True)
                         
-                        st.info("💡 **Importante:** O valor no PDF será ignorado. Use o valor configurado abaixo (padrão: R$ 89,00)")
+                        registros_sem_valor = sum(1 for r in valid_records if not r.get('valor'))
+                        if registros_sem_valor > 0:
+                            st.warning(f"⚠️ **{registros_sem_valor} registro(s)** sem valor no PDF. Para esses, será usado o valor padrão configurado abaixo.")
+                        else:
+                            st.success("✅ Valor extraído do PDF para todos os registros. O valor do formulário abaixo será usado apenas como fallback.")
                     
                     # Configuração do serviço
                     st.markdown("### 3️⃣ Configuração do Serviço")
@@ -537,12 +543,12 @@ def render_batch_emission():
                         
                         with col1:
                             valor_servico = st.number_input(
-                                "💰 Valor do Serviço (R$) *",
+                                "💰 Valor Padrão/Fallback (R$) *",
                                 min_value=0.01,
-                                value=89.00,  # VALOR PADRÃO: R$ 89,00
+                                value=89.00,
                                 step=1.00,
                                 format="%.2f",
-                                help="Este valor será usado para TODAS as NFS-e (valor do PDF é ignorado)"
+                                help="Usado apenas quando o PDF não contiver valor. Se o PDF tiver valor, ele será prioritário."
                             )
                             
                             aliquota_iss = st.number_input(
@@ -599,7 +605,9 @@ def render_batch_emission():
                             st.metric("Registros", min(limite_lote, len(valid_records)))
                         
                         with col2:
-                            valor_total = valor_servico * min(limite_lote, len(valid_records))
+                            # Calcula valor total usando o valor do PDF de cada registro ou o valor padrão
+                            registros_resumo = valid_records[:min(limite_lote, len(valid_records))]
+                            valor_total = sum(r.get('valor') or valor_servico for r in registros_resumo)
                             st.metric("Valor Total", f"R$ {valor_total:,.2f}")
                         
                         with col3:
@@ -607,7 +615,8 @@ def render_batch_emission():
                             st.metric("ISS Total", f"R$ {iss_total:,.2f}")
                         
                         with col4:
-                            st.metric("Valor Unitário", f"R$ {valor_servico:,.2f}")
+                            com_valor_pdf = sum(1 for r in registros_resumo if r.get('valor'))
+                            st.metric("Com valor do PDF", f"{com_valor_pdf}/{len(registros_resumo)}")
                         
                         st.markdown("---")
                         
@@ -780,10 +789,11 @@ def render_batch_emission():
                                             else:
                                                 discriminacao_com_hash = f"Hash do Paciente: {hash_paciente}"
                                         
-                                        # Serviço
-                                        app_logger.info(f"[{idx+1}] Criando objeto Servico...")
+                                        # Serviço — usa o valor do PDF; se não disponível, usa o valor padrão do formulário
+                                        valor_nota = record.get('valor') or valor_servico
+                                        app_logger.info(f"[{idx+1}] Criando objeto Servico (valor={valor_nota}, fonte={'PDF' if record.get('valor') else 'formulário'})...")
                                         servico_obj = Servico(
-                                            valor_servico=valor_servico,
+                                            valor_servico=valor_nota,
                                             aliquota_iss=aliquota_iss,
                                             item_lista_servico=item_lista,
                                             descricao=descricao_com_hash,

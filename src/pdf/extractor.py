@@ -21,7 +21,7 @@ class PDFDataExtractor:
         'telefone': r'\b\d{10,11}\b',  # Telefone (10 ou 11 dígitos)
         'hash': r'PACIENTEBLIS\w+',  # Hash do paciente
         'email': r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}',  # Email
-        'valor': r'R\$\s*\d+[,.]?\d*',  # Valor monetário
+        'valor': r'R\$\s*[\d.]+,\d{2}',  # Valor monetário no formato brasileiro (R$ 1.234,56)
         'data': r'\d{2}/\d{2}/\d{4}',  # Data formato DD/MM/YYYY
     }
     
@@ -122,6 +122,7 @@ class PDFDataExtractor:
                 cpf_matches = re.findall(self.PATTERNS['cpf'], line)
                 telefone_matches = re.findall(self.PATTERNS['telefone'], line)
                 data_matches = re.findall(self.PATTERNS['data'], line)
+                valor_match = re.search(self.PATTERNS['valor'], line)
                 
                 if not hash_match or not cpf_matches:
                     continue
@@ -173,7 +174,16 @@ class PDFDataExtractor:
                 # Data da consulta (primeira data encontrada)
                 data_consulta = data_matches[0] if data_matches else None
                 
-                # NOTA: Valor do PDF é ignorado - será usado o valor configurado no formulário
+                # Extrair valor monetário do PDF
+                valor = None
+                if valor_match:
+                    valor_str = valor_match.group().replace('R$', '').strip()
+                    # Remove separador de milhar (.) e converte separador decimal (, -> .)
+                    valor_str = valor_str.replace('.', '').replace(',', '.')
+                    try:
+                        valor = float(valor_str)
+                    except ValueError:
+                        valor = None
                 
                 # Formatar CPF com tratamento de erro
                 cpf_formatado = cpf
@@ -191,9 +201,9 @@ class PDFDataExtractor:
                     'email': email if email else None,
                     'telefone': telefone if telefone else None,
                     'data_consulta': data_consulta,
+                    'valor': valor,  # Valor extraído do PDF (None se não encontrado)
                     'page': page_num,
                     'valido': True,
-                    # Valor será definido no formulário (não extrai do PDF)
                 }
                 
                 records.append(record)
