@@ -822,8 +822,8 @@ def render_batch_emission():
                                                 'data_emissao': datetime.now().strftime("%d/%m/%Y %H:%M:%S"),
                                                 'tomador_nome': record.get('nome', 'N/A'),
                                                 'tomador_cpf': record.get('cpf', 'N/A'),
-                                                'valor': valor_servico,
-                                                'iss': valor_servico * (aliquota_iss / 100),
+                                                'valor': float(valor_nota),
+                                                'iss': float(valor_nota) * (aliquota_iss / 100),
                                                 'xml_path': resultado.get('xml_path'),
                                                 'pdf_path': resultado.get('pdf_path'),
                                                 'resultado_completo': resultado
