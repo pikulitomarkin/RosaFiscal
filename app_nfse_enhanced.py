@@ -30,8 +30,7 @@ from src.models.schemas import ProcessingResult, PrestadorServico, TomadorServic
 from src.utils.logger import app_logger
 from src.utils.certificate import get_certificate_manager
 
-# Import das funções de emissão completa
-from emitir_nfse_completo import emitir_nfse_com_pdf
+# IPM: emissão via Atende.Net (Basic Auth — certificado não necessário para envio)
 
 # Configuração da página
 st.set_page_config(
@@ -356,105 +355,70 @@ def render_single_emission():
         if not tomador_cpf or not tomador_nome or not valor_servico:
             st.error("❌ Preencha todos os campos obrigatórios (*)")
         else:
-            # Preparar dados
-            prestador = PrestadorServico(
-                cnpj='59418245000186',
-                inscricao_municipal='8259069',
-                razao_social='GABRIEL SALEH SERVICOS MEDICOS LTDA',
-                logradouro='Rua Exemplo',
-                numero='123',
-                bairro='Centro',
-                municipio='Florianopolis',
-                uf='SC',
-                cep='88010000'
-            )
-            
             cpf_limpo = tomador_cpf.replace('.', '').replace('-', '').replace('/', '')
-            tomador = TomadorServico(
-                cpf=cpf_limpo if len(cpf_limpo) == 11 else None,
-                cnpj=cpf_limpo if len(cpf_limpo) == 14 else None,
-                nome=tomador_nome,
-                email=tomador_email if tomador_email else None,
-                telefone=tomador_telefone if tomador_telefone else None
-            )
-            
-            # Adicionar hash do paciente na descrição (aparece na DANFSE)
-            descricao_final = hash_paciente if hash_paciente and hash_paciente.strip() else descricao_servico
-            
-            servico = Servico(
-                valor_servico=valor_servico,
-                aliquota_iss=aliquota_iss,
-                item_lista_servico=item_lista,
-                descricao=descricao_final,
-                discriminacao=discriminacao if discriminacao else None
-            )
-            
-            # Emitir NFS-e
-            with st.spinner("⏳ Emitindo NFS-e... Por favor aguarde..."):
+
+            registro_ipm = {
+                "cpf": cpf_limpo,
+                "nome": tomador_nome,
+                "hash": hash_paciente or "",
+                "bairro": tomador_bairro or "NAO INFORMADO",
+                "cep": (tomador_cep or "").replace("-", "") or "00000000",
+                "logradouro": tomador_logradouro or "NAO INFORMADO",
+            }
+            config_ipm = {
+                "valor": valor_servico,
+                "aliquota_iss": aliquota_iss,
+                "item_lista": item_lista,
+                "descricao": hash_paciente if hash_paciente and hash_paciente.strip() else descricao_servico,
+            }
+
+            with st.spinner("⏳ Emitindo NFS-e via IPM/Atende.Net... Por favor aguarde..."):
                 try:
-                    resultado = asyncio.run(emitir_nfse_com_pdf(prestador, tomador, servico))
-                    
-                    if resultado['sucesso']:
+                    ipm_results = asyncio.run(
+                        get_nfse_service().emitir_nfse_lote_ipm([registro_ipm], config_ipm)
+                    )
+                    ipm_r = ipm_results[0]
+                    sucesso = ipm_r.status == "sucesso"
+
+                    if sucesso:
                         st.success("✅ NFS-e emitida com sucesso!")
-                        
-                        # Salvar na sessão
+
                         nfse_data = {
-                            'chave_acesso': resultado['chave_acesso'],
-                            'numero': resultado.get('numero', 'N/A'),
+                            'chave_acesso': ipm_r.protocolo or ipm_r.numero_nfse or 'N/A',
+                            'numero': ipm_r.numero_nfse or 'N/A',
                             'data_emissao': datetime.now().strftime("%d/%m/%Y %H:%M:%S"),
                             'tomador_nome': tomador_nome,
                             'tomador_cpf': tomador_cpf,
                             'valor': valor_servico,
                             'iss': valor_servico * (aliquota_iss / 100),
-                            'xml_path': resultado.get('xml_path'),
-                            'pdf_path': resultado.get('pdf_path'),
-                            'resultado_completo': resultado
+                            'xml_path': None,
+                            'pdf_path': None,
                         }
-                        
+
                         st.session_state.emitted_nfse.append(nfse_data)
                         st.session_state.last_emission = nfse_data
-                        
-                        # Salvar persistência
                         save_emitted_nfse()
-                        
-                        # Exibir resultado
+
                         st.markdown("---")
                         st.markdown("### ✅ NFS-e Emitida com Sucesso!")
-                        
+
                         col1, col2, col3 = st.columns(3)
-                        
                         with col1:
-                            st.metric("Número", resultado.get('numero', 'N/A'))
+                            st.metric("Número", ipm_r.numero_nfse or 'N/A')
                         with col2:
                             st.metric("Valor", f"R$ {valor_servico:,.2f}")
                         with col3:
                             st.metric("ISS", f"R$ {valor_servico * (aliquota_iss / 100):,.2f}")
-                        
-                        st.markdown(f"**🔑 Chave de Acesso:**")
-                        st.code(resultado['chave_acesso'], language=None)
-                        
-                        # Botões de download (AGORA FORA DO FORM)
-                        st.markdown("### 📥 Downloads")
-                        
-                        col_xml, col_pdf, col_space = st.columns([1, 1, 2])
-                        
-                        with col_xml:
-                            if resultado.get('xml_path'):
-                                download_file_button(resultado['xml_path'], "📄 Baixar XML", key="single_xml")
-                        
-                        with col_pdf:
-                            if resultado.get('pdf_path'):
-                                download_file_button(resultado['pdf_path'], "📑 Baixar PDF", key="single_pdf")
-                        
+
+                        st.markdown("**🔑 Chave/Verificador:**")
+                        st.code(ipm_r.protocolo or ipm_r.numero_nfse or 'N/A', language=None)
+
                     else:
-                        st.error(f"❌ Erro na emissão: {resultado.get('mensagem', 'Erro desconhecido')}")
-                        if resultado.get('resultado'):
-                            with st.expander("🔍 Detalhes do Erro"):
-                                st.json(resultado['resultado'])
-                
+                        st.error(f"❌ Erro ao emitir NFS-e: {ipm_r.mensagem or 'Erro desconhecido'}")
+
                 except Exception as e:
                     st.error(f"❌ Erro ao emitir NFS-e: {str(e)}")
-                    app_logger.error(f"Erro na emissão individual: {e}", exc_info=True)
+                    app_logger.error(f"Erro na emissão individual IPM: {e}", exc_info=True)
 
 
 # ============================================================================
@@ -700,38 +664,20 @@ def render_batch_emission():
                                                     return True
                                     return False
 
-                                def emitir_com_retry(prestador_obj, tomador_obj, servico_obj, max_tentativas=MAX_TENTATIVAS):
-                                    """Emite NFS-e com retry e tratamento E0014: consulta idDPS; se existir considera sucesso, senão aguarda 5s e reenvia (até 3x)."""
-                                    ultimo_resultado = None
-                                    for tentativa in range(max_tentativas):
-                                        resultado = asyncio.run(emitir_nfse_com_pdf(prestador_obj, tomador_obj, servico_obj))
-                                        ultimo_resultado = resultado
-                                        if resultado.get("sucesso"):
-                                            return resultado
-                                        body = resultado.get("response_body")
-                                        if body and _eh_erro_e0014(body):
-                                            id_dps = _extrair_id_dps(body)
-                                            app_logger.warning(f"E0014 recebido (tentativa {tentativa+1}). idDPS={id_dps}. Consultando se NFS-e já existe...")
-                                            if id_dps:
-                                                try:
-                                                    consulta = asyncio.run(get_nfse_service().client.consultar_nfse_por_id_dps(id_dps))
-                                                    if consulta:
-                                                        chave = consulta.get("chaveAcesso") or consulta.get("chave_acesso")
-                                                        app_logger.info(f"NFS-e já existia (idDPS={id_dps}). Considerado sucesso. Chave: {chave}")
-                                                        return {"sucesso": True, "chave_acesso": chave, "xml_path": None, "pdf_path": None, "resultado": consulta, "numero": None}
-                                                except Exception as ex:
-                                                    app_logger.warning(f"Consulta idDPS falhou: {ex}")
-                                            if tentativa < max_tentativas - 1:
-                                                app_logger.info(f"NFS-e não encontrada. Aguardando {DELAY_RETRY_E0014}s para reenviar (tentativa {tentativa+1}/{max_tentativas})...")
-                                                time.sleep(DELAY_RETRY_E0014)
-                                                continue
-                                            ultimo_resultado = {**resultado, "mensagem": resultado.get("erro") or resultado.get("mensagem") or "E0014 - NFS-e não encontrada após consulta. Requer atenção manual."}
-                                            return ultimo_resultado
-                                        if tentativa < max_tentativas - 1:
-                                            time.sleep(1)
-                                            continue
-                                        return {**resultado, "mensagem": resultado.get("mensagem") or resultado.get("erro", "Erro desconhecido")}
-                                    return ultimo_resultado or {"sucesso": False, "erro": "Erro após todas as tentativas", "mensagem": "Erro após todas as tentativas"}
+                                def _emitir_ipm_registro(registro_dict, config_dict):
+                                    """Emite uma NFS-e via IPM/Atende.Net e retorna dict compatível com o loop."""
+                                    ipm_results = asyncio.run(
+                                        get_nfse_service().emitir_nfse_lote_ipm([registro_dict], config_dict)
+                                    )
+                                    r = ipm_results[0]
+                                    return {
+                                        "sucesso": r.status == "sucesso",
+                                        "chave_acesso": r.protocolo or r.numero_nfse or "N/A",
+                                        "numero": r.numero_nfse or "N/A",
+                                        "xml_path": None,
+                                        "pdf_path": None,
+                                        "mensagem": r.mensagem or "",
+                                    }
                                 
                                 for idx, record in enumerate(records_to_process):
                                     status_text.text(f"⏳ Processando {idx+1}/{len(records_to_process)}: {record.get('nome', 'N/A')}...")
@@ -801,9 +747,23 @@ def render_batch_emission():
                                         )
                                         app_logger.info(f"[{idx+1}] Servico criado com sucesso")
                                         
-                                        # Emitir NFS-e com retry automático
-                                        app_logger.info(f"[{idx+1}] Chamando emitir_com_retry...")
-                                        resultado = emitir_com_retry(prestador_obj, tomador_obj, servico_obj)
+                                        # Emitir NFS-e via IPM/Atende.Net
+                                        app_logger.info(f"[{idx+1}] Chamando IPM Atende.Net...")
+                                        _reg_ipm = {
+                                            "cpf": cpf_cnpj,
+                                            "nome": record.get("nome", ""),
+                                            "hash": hash_paciente or "",
+                                            "bairro": record.get("bairro", "NAO INFORMADO"),
+                                            "cep": (record.get("cep") or "").replace("-", "") or "00000000",
+                                            "logradouro": record.get("logradouro", "NAO INFORMADO"),
+                                        }
+                                        _cfg_ipm = {
+                                            "valor": float(valor_nota),
+                                            "aliquota_iss": aliquota_iss,
+                                            "item_lista": item_lista,
+                                            "descricao": descricao_com_hash,
+                                        }
+                                        resultado = _emitir_ipm_registro(_reg_ipm, _cfg_ipm)
                                         app_logger.info(f"[{idx+1}] Emissão concluída: {resultado.get('sucesso', False)}")
                                         
                                         # Throttling: 2 segundos entre cada emissão (reduz E0014 intermitente)
