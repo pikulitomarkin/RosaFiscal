@@ -310,8 +310,8 @@ def render_single_emission():
         with col3:
             item_lista = st.text_input(
                 "Item Lista LC 116/2003 *",
-                value="04.01.01",
-                help="Código do serviço conforme Lista LC 116/2003"
+                value="40303",
+                help="Código IPM do serviço (5 dígitos, sem pontos). Ex: 40303 = consulta médica"
             )
         
         descricao_servico = st.text_area(
@@ -368,7 +368,7 @@ def render_single_emission():
             config_ipm = {
                 "valor": valor_servico,
                 "aliquota_iss": aliquota_iss,
-                "item_lista": item_lista,
+                "item_lista": item_lista.replace(".", ""),
                 "descricao": hash_paciente if hash_paciente and hash_paciente.strip() else descricao_servico,
             }
 
@@ -760,7 +760,7 @@ def render_batch_emission():
                                         _cfg_ipm = {
                                             "valor": float(valor_nota),
                                             "aliquota_iss": aliquota_iss,
-                                            "item_lista": item_lista,
+                                            "item_lista": item_lista.replace(".", ""),
                                             "descricao": descricao_com_hash,
                                         }
                                         resultado = _emitir_ipm_registro(_reg_ipm, _cfg_ipm)
