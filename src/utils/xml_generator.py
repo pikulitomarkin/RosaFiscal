@@ -89,7 +89,7 @@ class NFSeXMLGenerator:
         numero_dps = str(self._dps_counter).zfill(15)  # 15 dígitos para o ID
         numero_dps_element = str(self._dps_counter)  # Número SEM zeros à esquerda para o elemento nDPS
         
-        id_dps = f"DPS4205407{1 if len(cnpj_prestador) == 11 else 2}{cnpj_prestador}{serie_dps}{numero_dps}"
+        id_dps = f"DPS4318002{1 if len(cnpj_prestador) == 11 else 2}{cnpj_prestador}{serie_dps}{numero_dps}"
         inf_dps.set("Id", id_dps)
         
         # ORDEM CORRETA CONFORME XSD v1.01:
@@ -124,7 +124,7 @@ class NFSeXMLGenerator:
         SubElement(inf_dps, "tpEmit").text = "1"
         
         # 8. cLocEmi - Código IBGE do município emissor
-        SubElement(inf_dps, "cLocEmi").text = "4205407"  # Florianópolis-SC
+        SubElement(inf_dps, "cLocEmi").text = "4318002"  # Santa Rosa-RS
         
         # 9. prest - Dados do Prestador
         prest_elem = SubElement(inf_dps, "prest")
@@ -157,8 +157,9 @@ class NFSeXMLGenerator:
         SubElement(parent, "CNPJ").text = prestador.cnpj
         
         # 2. IM - Inscrição Municipal
-        if prestador.inscricao_municipal:
-            SubElement(parent, "IM").text = prestador.inscricao_municipal
+        # Não informar se o município não possui informações no CNC NFS-e (erro E0120)
+        # if prestador.inscricao_municipal:
+        #     SubElement(parent, "IM").text = prestador.inscricao_municipal
         
         # 3. xNome - Razão Social - NÃO ENVIAR quando prestador é o emitente (E0121)
         # SubElement(parent, "xNome").text = prestador.razao_social
@@ -175,10 +176,9 @@ class NFSeXMLGenerator:
         # 5. regTrib - Regimes Tributários (obrigatório)
         reg_trib = SubElement(parent, "regTrib")
         # opSimpNac: 1=Não optante, 2=Optante SN, 3=MEI
+        # CNPJ 05.863.340/0001-60 validado pela Receita Federal como MEI (E0041)
         SubElement(reg_trib, "opSimpNac").text = "3"  # 3=MEI
-        # regApTribSN - Regime de Apuração dos Tributos do SN (obrigatório para optante SN)
-        # 1=Caixa, 2=Competência
-        SubElement(reg_trib, "regApTribSN").text = "2"  # 2=Competência
+        # regApTribSN: não enviado para MEI (apenas para Optante SN)
         SubElement(reg_trib, "regEspTrib").text = "0"  # 0=Nenhum
     
     def _add_tomador_v101(self, parent: Element, tomador: TomadorServico):
@@ -198,7 +198,7 @@ class NFSeXMLGenerator:
         
         # 1. locPrest - Local da Prestação
         loc_prest = SubElement(parent, "locPrest")
-        SubElement(loc_prest, "cLocPrestacao").text = "4205407"  # Florianópolis
+        SubElement(loc_prest, "cLocPrestacao").text = "4318002"  # Santa Rosa-RS
         
         # 2. cServ - Elemento container para códigos e descrição do serviço
         c_serv_elem = SubElement(parent, "cServ")
@@ -402,76 +402,104 @@ class NFSeXMLGenerator:
     
     def assinar_xml(self, xml_string: str) -> str:
         """
-        Assina digitalmente o XML usando certificado A1 (padrão XMLDSig).
-        
-        Args:
-            xml_string: XML em formato string
-            
-        Returns:
-            XML assinado digitalmente
-            
-        Raises:
-            RuntimeError: Se signxml não estiver instalado
-            ValueError: Se certificado ou chave não configurados
+        Assina digitalmente o XML usando XMLDSig sem prefixos de namespace.
+        Implementação manual necessária pois signxml adiciona prefixo ds: que
+        a Sefin Nacional rejeita (E6155), e remover o prefixo após assinar
+        invalida a assinatura (E0714).
         """
-        if not SIGNXML_AVAILABLE:
-            raise RuntimeError(
-                "Biblioteca 'signxml' não instalada. "
-                "Instale com: pip install signxml lxml"
-            )
-        
         if not self.cert_path or not self.key_path:
             raise ValueError(
-                "Certificado e chave privada devem ser configurados para assinar XML. "
-                "Passe cert_path e key_path no construtor."
+                "Certificado e chave privada devem ser configurados para assinar XML."
             )
-        
-        # Verificar se arquivos existem
+
         cert_file = Path(self.cert_path)
         key_file = Path(self.key_path)
-        
+
         if not cert_file.exists():
             raise FileNotFoundError(f"Certificado não encontrado: {self.cert_path}")
-        
         if not key_file.exists():
             raise FileNotFoundError(f"Chave privada não encontrada: {self.key_path}")
-        
+
         try:
-            # Parse XML com lxml
-            root = etree.fromstring(xml_string.encode('utf-8'))
-            
-            # Ler certificado e chave
-            with open(cert_file, 'rb') as f:
-                cert_data = f.read()
-            
-            with open(key_file, 'rb') as f:
-                key_data = f.read()
-            
-            # Configurar assinador XMLDSig
-            signer = XMLSigner(
-                method=methods.enveloped,  # Assinatura envelopada (dentro do XML)
-                signature_algorithm='rsa-sha256',  # Algoritmo de assinatura
-                digest_algorithm='sha256',  # Algoritmo de hash
-                c14n_algorithm='http://www.w3.org/TR/2001/REC-xml-c14n-20010315'
+            import hashlib
+            import base64
+            import re
+            from lxml import etree as _etree
+            from cryptography.hazmat.primitives import hashes, serialization
+            from cryptography.hazmat.primitives.asymmetric import padding
+            from cryptography.hazmat.primitives.serialization import load_pem_private_key
+            from cryptography.x509 import load_pem_x509_certificate
+
+            DSIG_NS = "http://www.w3.org/2000/09/xmldsig#"
+            C14N_ALG = "http://www.w3.org/TR/2001/REC-xml-c14n-20010315"
+
+            # 1. Parse XML
+            root = _etree.fromstring(xml_string.encode('utf-8'))
+
+            # 2. C14N do documento SEM Signature (documento original)
+            c14n_bytes = _etree.tostring(root, method='c14n')
+            digest_b64 = base64.b64encode(hashlib.sha256(c14n_bytes).digest()).decode()
+
+            # 3. Construir <SignedInfo> com namespace padrão (sem prefixo)
+            signed_info_elem = _etree.fromstring((
+                f'<SignedInfo xmlns="{DSIG_NS}">'
+                f'<CanonicalizationMethod Algorithm="{C14N_ALG}"/>'
+                f'<SignatureMethod Algorithm="http://www.w3.org/2001/04/xmldsig-more#rsa-sha256"/>'
+                f'<Reference URI="">'
+                f'<Transforms>'
+                f'<Transform Algorithm="http://www.w3.org/2000/09/xmldsig#enveloped-signature"/>'
+                f'<Transform Algorithm="{C14N_ALG}"/>'
+                f'</Transforms>'
+                f'<DigestMethod Algorithm="http://www.w3.org/2001/04/xmlenc#sha256"/>'
+                f'<DigestValue>{digest_b64}</DigestValue>'
+                f'</Reference>'
+                f'</SignedInfo>'
+            ).encode('utf-8'))
+
+            # 4. C14N do SignedInfo e assinar com RSA-SHA256
+            signed_info_c14n = _etree.tostring(signed_info_elem, method='c14n')
+            with open(self.key_path, 'rb') as f:
+                private_key = load_pem_private_key(f.read(), password=None)
+            sig_b64 = base64.b64encode(
+                private_key.sign(signed_info_c14n, padding.PKCS1v15(), hashes.SHA256())
+            ).decode()
+
+            # 5. Certificado em DER (Base64)
+            with open(self.cert_path, 'rb') as f:
+                cert = load_pem_x509_certificate(f.read())
+            cert_b64 = base64.b64encode(
+                cert.public_bytes(serialization.Encoding.DER)
+            ).decode()
+
+            # 6. Construir <Signature> com namespace padrão (sem prefixo ds:)
+            sig_elem = _etree.Element(
+                _etree.QName(DSIG_NS, 'Signature'),
+                nsmap={None: DSIG_NS}
             )
-            
-            # Assinar XML
-            signed_root = signer.sign(
-                root,
-                key=key_data,
-                cert=cert_data
-            )
-            
-            # Converter de volta para string
-            xml_assinado = etree.tostring(
-                signed_root,
-                encoding='unicode'
-            )
-            
-            # Adicionar declaração XML manualmente
-            xml_declaracao = '<?xml version="1.0" encoding="UTF-8"?>\n'
-            return xml_declaracao + xml_assinado
-            
+            sig_elem.append(signed_info_elem)
+            sv = _etree.SubElement(sig_elem, _etree.QName(DSIG_NS, 'SignatureValue'))
+            sv.text = sig_b64
+            ki = _etree.SubElement(sig_elem, _etree.QName(DSIG_NS, 'KeyInfo'))
+            x509d = _etree.SubElement(ki, _etree.QName(DSIG_NS, 'X509Data'))
+            x509c = _etree.SubElement(x509d, _etree.QName(DSIG_NS, 'X509Certificate'))
+            x509c.text = cert_b64
+
+            # 7. Adicionar Signature ao documento e serializar
+            root.append(sig_elem)
+            xml_assinado = _etree.tostring(root, encoding='unicode')
+
+            # Safety: remover prefixos automáticos que lxml possa ter adicionado
+            for ns in [DSIG_NS, "http://www.sped.fazenda.gov.br/nfse"]:
+                pattern = re.compile(r'xmlns:(ns\d+|ds)="' + re.escape(ns) + r'"')
+                m = pattern.search(xml_assinado)
+                if m:
+                    pfx = m.group(1)
+                    xml_assinado = xml_assinado.replace(f'xmlns:{pfx}="{ns}"', f'xmlns="{ns}"')
+                    xml_assinado = re.sub(f'<{pfx}:', '<', xml_assinado)
+                    xml_assinado = re.sub(f'</{pfx}:', '</', xml_assinado)
+
+            return '<?xml version="1.0" encoding="UTF-8"?>\n' + xml_assinado
+
         except Exception as e:
             raise RuntimeError(f"Erro ao assinar XML: {e}") from e
     

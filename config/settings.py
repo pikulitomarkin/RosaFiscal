@@ -56,6 +56,12 @@ class Settings(BaseSettings):
     LOG_LEVEL: str = "INFO"
     LOG_FILE: str = "logs/nfse_automation.log"
     
+    # IPM/Atende.Net - NFS-e Prefeitura de Santa Rosa-RS (ABRASF 2.04)
+    IPM_WEBSERVICE_URL: str = "https://santarosa.atende.net/?pg=rest&service=WNERestServiceNFSe"
+    IPM_USUARIO: str = ""
+    IPM_SENHA: str = ""
+    IPM_AMBIENTE_TESTE: bool = True  # True = modo teste (valida sem emitir)
+
     # Autenticação
     ADMIN_USERNAME: str = "admin"
     ADMIN_PASSWORD_HASH: str = "$2b$12$default_hash_change_in_production"

@@ -63,18 +63,19 @@ class NFSeService:
         Em produção, isso viria de um banco de dados ou arquivo de configuração.
         """
         return {
-            "cnpj": "12345678000190",
-            "inscricao_municipal": "123456",
-            "razao_social": "Empresa Prestadora LTDA",
-            "nome_fantasia": "Empresa",
-            "logradouro": "Av. Principal",
-            "numero": "1000",
-            "bairro": "Centro",
-            "municipio": "São Paulo",
-            "uf": "SP",
-            "cep": "01310000",
-            "email": "contato@empresa.com.br",
-            "telefone": "1140041234"
+            "cnpj": "05863340000160",
+            "inscricao_municipal": "40865",
+            "razao_social": "NEUROCLIN SERVICOS MEDICOS LTDA",
+            "nome_fantasia": "NEUROCLIN",
+            "logradouro": "RUA FERNANDO FERRARI",
+            "numero": "310",
+            "complemento": "SALA 201",
+            "bairro": "CENTRO",
+            "municipio": "SANTA ROSA",
+            "uf": "RS",
+            "cep": "98780001",
+            "email": "cadastro@dominiocontabil.com.br",
+            "telefone": "4836327480"
         }
     
     def _extrair_id_dps_do_erro(self, response_body: Any) -> Optional[str]:
@@ -303,6 +304,106 @@ class NFSeService:
         
         return results
     
+    async def emitir_nfse_lote_ipm(
+        self,
+        registros: List[Dict[str, str]],
+        config_servico: Dict[str, Any],
+        callback_progress: Optional[callable] = None,
+    ) -> List[ProcessingResult]:
+        """
+        Emite NFS-e em lote via IPM/Atende.Net (Prefeitura de Santa Rosa-RS, ABRASF 2.04).
+        """
+        from src.api.ipm_soap_client import IPMSoapClient
+        from src.utils.rps_xml_generator import RPSXMLGenerator
+
+        cert_path = settings.CERTIFICATE_PATH.replace(".pfx", "_cert.pem")
+        key_path = settings.CERTIFICATE_PATH.replace(".pfx", "_key.pem")
+
+        ipm_client = IPMSoapClient()
+        rps_gen = RPSXMLGenerator(
+            cert_path=cert_path,
+            key_path=key_path,
+            ambiente_teste=settings.IPM_AMBIENTE_TESTE,
+        )
+
+        prestador = self.prestador_config
+        total = len(registros)
+        results: List[ProcessingResult] = []
+
+        app_logger.info(f"IPM: Iniciando emissão de {total} NFS-e via Atende.Net")
+
+        for idx, registro in enumerate(registros):
+            if idx > 0:
+                await asyncio.sleep(2)
+
+            numero_rps = idx + 1
+            try:
+                rps_xml = rps_gen.gerar_enviar_lote_rps_sincrono(
+                    cnpj_prestador=prestador["cnpj"],
+                    inscricao_municipal=prestador["inscricao_municipal"],
+                    numero_lote=numero_rps,
+                    numero_rps=numero_rps,
+                    serie_rps="A",
+                    cpf_tomador=re.sub(r"\D", "", registro.get("cpf", "")),
+                    nome_tomador=registro.get("nome", ""),
+                    descricao=config_servico.get("descricao", "CONSULTA MEDICA"),
+                    valor=float(config_servico.get("valor", 0)),
+                    aliquota_iss=float(config_servico.get("aliquota_iss", 2.6011)),
+                    codigo_servico=config_servico.get("item_lista", "40303"),
+                    codigo_municipio="4318002",
+                    bairro_tomador=registro.get("bairro", "NAO INFORMADO"),
+                    cep_tomador=registro.get("cep", "00000000"),
+                    logradouro_tomador=registro.get("logradouro", "NAO INFORMADO"),
+                )
+
+                resposta = await ipm_client.enviar_lote_rps_sincrono(rps_xml)
+
+                erros = resposta.get("erros", [])
+                if erros:
+                    msgs = "; ".join(f"[{e.get('codigo')}] {e.get('mensagem')}" for e in erros)
+                    app_logger.error(f"IPM erro [{registro.get('hash')}]: {msgs}")
+                    results.append(ProcessingResult(
+                        hash_transacao=registro.get("hash", "N/A"),
+                        cpf_tomador=registro.get("cpf", "N/A"),
+                        nome_tomador=registro.get("nome", "N/A"),
+                        status="erro",
+                        mensagem=msgs,
+                        timestamp=datetime.now(),
+                    ))
+                else:
+                    numero = resposta.get("numero_nfse")
+                    chave = resposta.get("chave")
+                    app_logger.info(f"IPM sucesso [{registro.get('hash')}]: NFS-e {numero} | Chave: {chave}")
+                    results.append(ProcessingResult(
+                        hash_transacao=registro.get("hash", "N/A"),
+                        cpf_tomador=registro.get("cpf", "N/A"),
+                        nome_tomador=registro.get("nome", "N/A"),
+                        status="sucesso",
+                        numero_nfse=numero,
+                        protocolo=chave,
+                        mensagem=f"Emitida - NFS-e {numero}",
+                        timestamp=datetime.now(),
+                    ))
+
+            except Exception as exc:
+                app_logger.error(f"IPM exceção [{registro.get('hash')}]: {exc}")
+                results.append(ProcessingResult(
+                    hash_transacao=registro.get("hash", "N/A"),
+                    cpf_tomador=registro.get("cpf", "N/A"),
+                    nome_tomador=registro.get("nome", "N/A"),
+                    status="erro",
+                    mensagem=str(exc),
+                    timestamp=datetime.now(),
+                ))
+
+            if callback_progress:
+                callback_progress(idx + 1, total)
+
+        sucessos = sum(1 for r in results if r.status == "sucesso")
+        erros_total = sum(1 for r in results if r.status == "erro")
+        app_logger.info(f"IPM RELATÓRIO: Total={total} | Sucesso={sucessos} | Erro={erros_total}")
+        return results
+
     def _processar_resposta_lote(
         self,
         response: Dict[str, Any],
