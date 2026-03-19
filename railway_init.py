@@ -15,10 +15,13 @@ def setup_certificates():
     cert_dir = Path("certificados")
     cert_dir.mkdir(exist_ok=True)
     print(f"📁 Pasta certificados criada/verificada: {cert_dir.absolute()}")
-    
-    # Verificar se certificados já existem
-    cert_path = cert_dir / "cert.pem"
-    key_path = cert_dir / "key.pem"
+
+    # Deriva os nomes dos arquivos PEM a partir de CERTIFICATE_PATH
+    # Exemplo: "Neuroclinsenha123456.pfx" → "Neuroclinsenha123456_cert.pem"
+    certificate_path = os.getenv("CERTIFICATE_PATH", "certificados/cert.pem")
+    pfx_stem = Path(certificate_path).stem  # ex: "Neuroclinsenha123456"
+    cert_path = Path(f"{pfx_stem}_cert.pem")
+    key_path  = Path(f"{pfx_stem}_key.pem")
     
     if cert_path.exists() and key_path.exists():
         print("✅ Certificados já existem localmente")
