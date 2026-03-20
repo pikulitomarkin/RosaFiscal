@@ -344,8 +344,8 @@ def render_single_emission():
         with col3:
             item_lista = st.text_input(
                 "Item Lista LC 116/2003 *",
-                value="40303",
-                help="Código IPM do serviço (5 dígitos, sem pontos). Ex: 40303 = consulta médica"
+                value="40100",
+                help="Código IPM do serviço (5 dígitos, sem pontos). Ex: 40100 = Medicina e biomedicina (consulta médica)"
             )
         
         descricao_servico = st.text_area(
