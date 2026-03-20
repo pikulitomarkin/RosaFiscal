@@ -1162,9 +1162,6 @@ def render_emitted_nfse_list():
             else:
                 with st.spinner("📦 Gerando arquivo ZIP com os XMLs..."):
                     try:
-                        import zipfile
-                        from io import BytesIO
-                        from datetime import datetime
                         
                         # Criar arquivo ZIP em memória
                         zip_buffer = BytesIO()
@@ -1373,9 +1370,6 @@ def render_settings():
             else:
                 with st.spinner("📦 Gerando arquivo ZIP com todos os PDFs..."):
                     try:
-                        import zipfile
-                        from io import BytesIO
-                        from datetime import datetime
                         
                         # Criar arquivo ZIP em memória
                         zip_buffer = BytesIO()
@@ -1417,9 +1411,6 @@ def render_settings():
             else:
                 with st.spinner("📦 Gerando arquivo ZIP com todos os XMLs..."):
                     try:
-                        import zipfile
-                        from io import BytesIO
-                        from datetime import datetime
                         
                         # Criar arquivo ZIP em memória
                         zip_buffer = BytesIO()
