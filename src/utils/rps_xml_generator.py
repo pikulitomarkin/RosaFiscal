@@ -55,7 +55,8 @@ class RPSXMLGenerator:
         descricao: str,
         valor: float,
         aliquota_iss: float,
-        codigo_servico: str = "40300",
+        codigo_servico: str = "40303",
+        nbs: str = "1.2301.21.00",  # NBS: Serviços de clínica médica
         codigo_municipio: str = "4318002",  # IBGE (não usado internamente, usa TOM)
         cidade_tomador: str = CIDADE_SANTA_ROSA_TOM,
         bairro_tomador: str = "NAO INFORMADO",
@@ -127,6 +128,7 @@ class RPSXMLGenerator:
     <lista>
       <codigo_local_prestacao_servico>{CIDADE_SANTA_ROSA_TOM}</codigo_local_prestacao_servico>
       <codigo_item_lista_servico>{codigo_servico}</codigo_item_lista_servico>
+      <codigo_nbs>{nbs}</codigo_nbs>
       <descritivo>{descricao}</descritivo>
       <aliquota_item_lista_servico>{aliquota_fmt}</aliquota_item_lista_servico>
       <situacao_tributaria>00</situacao_tributaria>
