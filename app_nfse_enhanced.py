@@ -31,6 +31,45 @@ from src.utils.logger import app_logger
 from src.utils.certificate import get_certificate_manager
 
 # IPM: emissão via Atende.Net (Basic Auth — certificado não necessário para envio)
+from src.api.ipm_soap_client import IPMSoapClient as _IPMSoapClient
+
+
+def _gerar_zip_pdfs_ipm(links_nfse: list) -> tuple:
+    """
+    Baixa PDFs das NFS-e a partir dos link_nfse retornados pelo IPM e gera ZIP em memória.
+
+    Args:
+        links_nfse: lista de (nome_tomador, numero_nfse, link_url)
+
+    Returns:
+        (BytesIO com o ZIP, int com quantidade de PDFs baixados com sucesso)
+    """
+    import io
+    client = _IPMSoapClient()
+    zip_buffer = io.BytesIO()
+    baixados = 0
+    erros = []
+
+    with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zf:
+        for i, (nome, numero, link) in enumerate(links_nfse, 1):
+            if not link:
+                erros.append(f"#{i} {nome}: link não disponível")
+                continue
+            try:
+                pdf_bytes = asyncio.run(client.baixar_pdf(link))
+                nome_arquivo = f"nfse_{numero or i:03}_{re.sub(r'[^A-Za-z0-9]', '_', nome)[:20]}.pdf"
+                zf.writestr(nome_arquivo, pdf_bytes)
+                baixados += 1
+                app_logger.info(f"PDF baixado: {nome_arquivo} ({len(pdf_bytes)} bytes)")
+            except Exception as e:
+                erros.append(f"#{i} {nome}: {e}")
+                app_logger.warning(f"Não foi possível baixar PDF de {link}: {e}")
+
+    if erros:
+        app_logger.warning(f"PDFs não baixados ({len(erros)}): {erros}")
+
+    zip_buffer.seek(0)
+    return zip_buffer, baixados, erros
 
 # Configuração da página
 st.set_page_config(
@@ -872,56 +911,49 @@ def render_batch_emission():
                                 df_result = pd.DataFrame(resultados)
                                 st.dataframe(df_result, use_container_width=True)
                                 
-                                # Gerar ZIP com os PDFs automaticamente
+                                # Gerar ZIP com PDFs baixados dos links IPM
                                 if sucessos > 0:
                                     st.success(f"🎉 {sucessos} NFS-e emitidas com sucesso!")
-                                    
-                                    # Preparar ZIP com todos os PDFs do lote
+
                                     try:
-                                        with st.spinner("📦 Preparando download automático dos PDFs..."):
-                                            # Coletar PDFs das notas emitidas no lote
-                                            pdf_files = []
-                                            for nfse in st.session_state.emitted_nfse[-sucessos:]:  # Pegar apenas as últimas emitidas
-                                                pdf_path = nfse.get('pdf_path')
-                                                if pdf_path and Path(pdf_path).exists():
-                                                    pdf_files.append(Path(pdf_path))
-                                            
-                                            if pdf_files:
-                                                # Criar ZIP em memória
-                                                import io
-                                                zip_buffer = io.BytesIO()
-                                                
-                                                with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
-                                                    for pdf_path in pdf_files:
-                                                        zip_file.write(pdf_path, pdf_path.name)
-                                                
-                                                zip_buffer.seek(0)
-                                                
-                                                # Criar nome do arquivo com timestamp
-                                                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                                                zip_filename = f"nfse_lote_pdfs_{timestamp}.zip"
-                                                
-                                                st.success(f"✅ {len(pdf_files)} PDFs prontos para download!")
-                                                
-                                                # Botão de download automático
-                                                st.download_button(
-                                                    label=f"📥 Baixar {len(pdf_files)} PDFs (ZIP)",
-                                                    data=zip_buffer,
-                                                    file_name=zip_filename,
-                                                    mime="application/zip",
-                                                    use_container_width=True,
-                                                    type="primary"
+                                        with st.spinner("📦 Baixando PDFs da Prefeitura e gerando ZIP..."):
+                                            # Coleta links das notas recém-emitidas
+                                            notas_recentes = st.session_state.emitted_nfse[-sucessos:]
+                                            links = [
+                                                (
+                                                    n.get('tomador_nome', 'paciente'),
+                                                    n.get('numero', str(i+1)),
+                                                    n.get('link_nfse'),
                                                 )
-                                                
-                                                st.info("💡 **Dica:** O download foi preparado automaticamente. Clique no botão acima para salvar!")
-                                            else:
-                                                st.warning("⚠️ Nenhum arquivo PDF disponível para download")
-                                                st.info("💡 Acesse o menu 'NFS-e Emitidas' para visualizar todas as notas")
-                                    
+                                                for i, n in enumerate(notas_recentes)
+                                            ]
+
+                                            zip_buffer, baixados, erros_dl = _gerar_zip_pdfs_ipm(links)
+                                            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                                            zip_filename = f"nfse_lote_{timestamp}.zip"
+
+                                        if baixados > 0:
+                                            st.success(f"✅ {baixados}/{sucessos} PDFs prontos para download!")
+                                            st.download_button(
+                                                label=f"📥 Baixar {baixados} PDFs (ZIP)",
+                                                data=zip_buffer,
+                                                file_name=zip_filename,
+                                                mime="application/zip",
+                                                use_container_width=True,
+                                                type="primary",
+                                            )
+                                        else:
+                                            st.warning("⚠️ PDFs ainda não disponíveis nos links da Prefeitura.")
+                                            st.info("💡 Use os links individuais em 'NFS-e Emitidas' para baixar depois.")
+
+                                        if erros_dl:
+                                            with st.expander(f"⚠️ {len(erros_dl)} PDFs não baixados"):
+                                                for err in erros_dl:
+                                                    st.text(err)
+
                                     except Exception as e:
-                                        st.error(f"❌ Erro ao preparar download: {e}")
-                                        app_logger.error(f"Erro ao preparar ZIP de PDFs: {e}", exc_info=True)
-                                        st.info("💡 Acesse o menu 'NFS-e Emitidas' para baixar os arquivos individualmente")
+                                        st.error(f"❌ Erro ao preparar ZIP: {e}")
+                                        app_logger.error(f"Erro ao gerar ZIP de PDFs IPM: {e}", exc_info=True)
                 
                 else:
                     st.error("❌ Não foi possível extrair dados do PDF!")
@@ -1088,43 +1120,37 @@ def render_emitted_nfse_list():
             if not nfse_list:
                 st.warning("⚠️ Nenhuma nota no filtro atual")
             else:
-                with st.spinner("📦 Gerando arquivo ZIP com os PDFs..."):
+                with st.spinner("📦 Baixando PDFs da Prefeitura e gerando ZIP..."):
                     try:
-                        import zipfile
-                        from io import BytesIO
-                        from datetime import datetime
-                        
-                        # Criar arquivo ZIP em memória
-                        zip_buffer = BytesIO()
-                        
-                        with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
-                            pdfs_encontrados = 0
-                            
-                            for nota in nfse_list:
-                                pdf_path = nota.get('pdf_path')
-                                if pdf_path and Path(pdf_path).exists():
-                                    # Adicionar PDF ao ZIP
-                                    zip_file.write(pdf_path, Path(pdf_path).name)
-                                    pdfs_encontrados += 1
-                        
-                        if pdfs_encontrados > 0:
-                            # Preparar download
-                            zip_buffer.seek(0)
-                            data_hora = datetime.now().strftime("%Y%m%d_%H%M%S")
-                            
+                        links = [
+                            (
+                                n.get('tomador_nome', 'paciente'),
+                                n.get('numero', str(i+1)),
+                                n.get('link_nfse'),
+                            )
+                            for i, n in enumerate(nfse_list)
+                        ]
+                        zip_buffer, baixados, erros_dl = _gerar_zip_pdfs_ipm(links)
+                        data_hora = datetime.now().strftime("%Y%m%d_%H%M%S")
+
+                        if baixados > 0:
                             st.download_button(
-                                label=f"⬇️ Download ZIP ({pdfs_encontrados} PDFs)",
+                                label=f"⬇️ Download ZIP ({baixados} PDFs)",
                                 data=zip_buffer.getvalue(),
                                 file_name=f"nfse_pdfs_{data_hora}.zip",
                                 mime="application/zip",
                                 use_container_width=True,
                                 key="download_bulk_pdf"
                             )
-                            
-                            st.success(f"✅ {pdfs_encontrados} PDF(s) prontos para download!")
+                            st.success(f"✅ {baixados} PDF(s) prontos para download!")
                         else:
-                            st.warning("⚠️ Nenhum arquivo PDF encontrado no sistema")
-                    
+                            st.warning("⚠️ Nenhum PDF disponível nos links da Prefeitura.")
+
+                        if erros_dl:
+                            with st.expander(f"⚠️ {len(erros_dl)} PDFs não baixados"):
+                                for err in erros_dl:
+                                    st.text(err)
+
                     except Exception as e:
                         st.error(f"❌ Erro ao gerar ZIP: {e}")
     
