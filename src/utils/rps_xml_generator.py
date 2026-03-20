@@ -55,7 +55,7 @@ class RPSXMLGenerator:
         descricao: str,
         valor: float,
         aliquota_iss: float,
-        codigo_servico: str = "40100",
+        codigo_servico: str = "40300",
         codigo_municipio: str = "4318002",  # IBGE (não usado internamente, usa TOM)
         cidade_tomador: str = CIDADE_SANTA_ROSA_TOM,
         bairro_tomador: str = "NAO INFORMADO",

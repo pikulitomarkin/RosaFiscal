@@ -349,7 +349,7 @@ class NFSeService:
                     descricao=config_servico.get("descricao", "CONSULTA MEDICA"),
                     valor=float(config_servico.get("valor", 0)),
                     aliquota_iss=float(config_servico.get("aliquota_iss", 2.6011)),
-                    codigo_servico=config_servico.get("item_lista", "40100"),
+                    codigo_servico=config_servico.get("item_lista", "40300"),
                     codigo_municipio="4318002",
                     bairro_tomador=registro.get("bairro", "NAO INFORMADO"),
                     cep_tomador=registro.get("cep", "00000000"),
