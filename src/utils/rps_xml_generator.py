@@ -8,8 +8,11 @@ Blocos obrigatórios para nova emissão:
   <nf>   - dados da NFS-e (SEM <situacao> para nova emissão; apenas para cancelamento usa <situacao>C</situacao>)
   <prestador>, <tomador>, <itens>
 """
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 from typing import Optional
+
+# Fuso horário de Brasília (UTC-3) — usado para data/hora do fato gerador
+BRT = timezone(timedelta(hours=-3))
 
 
 # TOM code para Santa Rosa-RS (código de município IPM, não IBGE)
@@ -64,7 +67,7 @@ class RPSXMLGenerator:
         Estrutura validada contra o servidor: <rps> + <nf> (sem <situacao>) + <prestador> + <tomador> + <itens>.
         """
         nfse_teste = "1" if self.ambiente_teste else "0"
-        agora = datetime.now()
+        agora = datetime.now(BRT)  # Sempre horário de Brasília (UTC-3)
         data_str = agora.strftime("%d/%m/%Y")
         hora_str = agora.strftime("%H:%M:%S")
 
