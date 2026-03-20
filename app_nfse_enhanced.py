@@ -211,13 +211,8 @@ def render_overview():
                     st.markdown(f"**ISS:** R$ {nfse.get('iss', 0):,.2f}")
                     
                     # Botões de download
-                    col_xml, col_pdf = st.columns(2)
-                    with col_xml:
-                        if nfse.get('xml_path'):
-                            download_file_button(nfse['xml_path'], "📄 XML", key=f"xml_{nfse['chave_acesso']}")
-                    with col_pdf:
-                        if nfse.get('pdf_path'):
-                            download_file_button(nfse['pdf_path'], "📑 PDF", key=f"pdf_{nfse['chave_acesso']}")
+                    if nfse.get('link_nfse'):
+                        st.link_button("📄 PDF da NFS-e (Prefeitura)", nfse['link_nfse'])
     else:
         st.info("ℹ️ Nenhuma NFS-e emitida ainda")
 
@@ -393,6 +388,7 @@ def render_single_emission():
                             'iss': valor_servico * (aliquota_iss / 100),
                             'xml_path': None,
                             'pdf_path': None,
+                            'link_nfse': ipm_r.link_nfse,
                         }
 
                         st.session_state.emitted_nfse.append(nfse_data)
@@ -412,6 +408,10 @@ def render_single_emission():
 
                         st.markdown("**🔑 Chave/Verificador:**")
                         st.code(ipm_r.protocolo or ipm_r.numero_nfse or 'N/A', language=None)
+
+                        if ipm_r.link_nfse:
+                            st.markdown("**📄 PDF da NFS-e (Prefeitura):**")
+                            st.link_button("Baixar PDF da NFS-e", ipm_r.link_nfse)
 
                     else:
                         st.error(f"❌ Erro ao emitir NFS-e: {ipm_r.mensagem or 'Erro desconhecido'}")
@@ -676,6 +676,7 @@ def render_batch_emission():
                                         "numero": r.numero_nfse or "N/A",
                                         "xml_path": None,
                                         "pdf_path": None,
+                                        "link_nfse": r.link_nfse,
                                         "mensagem": r.mensagem or "",
                                     }
                                 
@@ -784,9 +785,9 @@ def render_batch_emission():
                                                 'tomador_cpf': record.get('cpf', 'N/A'),
                                                 'valor': float(valor_nota),
                                                 'iss': float(valor_nota) * (aliquota_iss / 100),
-                                                'xml_path': resultado.get('xml_path'),
-                                                'pdf_path': resultado.get('pdf_path'),
-                                                'resultado_completo': resultado
+                                                'xml_path': None,
+                                                'pdf_path': None,
+                                                'link_nfse': resultado.get('link_nfse'),
                                             }
                                             
                                             st.session_state.emitted_nfse.append(nfse_data)

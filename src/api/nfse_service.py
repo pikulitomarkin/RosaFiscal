@@ -373,7 +373,8 @@ class NFSeService:
                 else:
                     numero = resposta.get("numero_nfse")
                     chave = resposta.get("chave")
-                    app_logger.info(f"IPM sucesso [{registro.get('hash')}]: NFS-e {numero} | Chave: {chave}")
+                    link = resposta.get("link")
+                    app_logger.info(f"IPM sucesso [{registro.get('hash')}]: NFS-e {numero} | Chave: {chave} | Link: {link}")
                     results.append(ProcessingResult(
                         hash_transacao=registro.get("hash", "N/A"),
                         cpf_tomador=registro.get("cpf", "N/A"),
@@ -381,6 +382,7 @@ class NFSeService:
                         status="sucesso",
                         numero_nfse=numero,
                         protocolo=chave,
+                        link_nfse=link,
                         mensagem=f"Emitida - NFS-e {numero}",
                         timestamp=datetime.now(),
                     ))
