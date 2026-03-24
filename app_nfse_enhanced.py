@@ -92,30 +92,113 @@ DATA_DIR.mkdir(parents=True, exist_ok=True)
 PERSISTENCE_FILE = DATA_DIR / "nfse_emitidas.json"
 
 def save_emitted_nfse():
-    """Salva as NFS-e emitidas em arquivo JSON."""
+    """Salva as NFS-e emitidas em arquivo JSON (cache local) e no banco de dados."""
+    # 1. Salva no arquivo JSON como cache local
     try:
-        # Garantir que o diretório existe
         PERSISTENCE_FILE.parent.mkdir(parents=True, exist_ok=True)
-        
         with open(PERSISTENCE_FILE, 'w', encoding='utf-8') as f:
             json.dump(st.session_state.emitted_nfse, f, ensure_ascii=False, indent=2)
         app_logger.info(f"Notas salvas em {PERSISTENCE_FILE}: {len(st.session_state.emitted_nfse)} registros")
     except Exception as e:
-        app_logger.error(f"Erro ao salvar notas em {PERSISTENCE_FILE}: {e}")
+        app_logger.error(f"Erro ao salvar JSON local: {e}")
+
+    # 2. Salva no banco de dados (fonte primária)
+    try:
+        _sync_notas_para_db(st.session_state.emitted_nfse)
+    except Exception as e:
+        app_logger.error(f"Erro ao salvar no banco de dados: {e}")
+
 
 def load_emitted_nfse():
-    """Carrega as NFS-e emitidas do arquivo JSON."""
+    """Carrega NFS-e emitidas — prioriza banco de dados, fallback para JSON."""
+    # 1. Tenta carregar do banco de dados
+    try:
+        notas_db = _load_notas_do_db()
+        if notas_db:
+            app_logger.info(f"Notas carregadas do banco: {len(notas_db)} registros")
+            return notas_db
+    except Exception as e:
+        app_logger.warning(f"Banco indisponível, usando JSON local: {e}")
+
+    # 2. Fallback: arquivo JSON local
     try:
         if PERSISTENCE_FILE.exists():
             with open(PERSISTENCE_FILE, 'r', encoding='utf-8') as f:
                 data = json.load(f)
-                app_logger.info(f"Notas carregadas de {PERSISTENCE_FILE}: {len(data)} registros")
+                app_logger.info(f"Notas carregadas do JSON: {len(data)} registros")
                 return data
-        else:
-            app_logger.info(f"Arquivo {PERSISTENCE_FILE} não encontrado. Iniciando com lista vazia.")
     except Exception as e:
-        app_logger.error(f"Erro ao carregar notas de {PERSISTENCE_FILE}: {e}")
+        app_logger.error(f"Erro ao carregar JSON local: {e}")
     return []
+
+
+def _sync_notas_para_db(notas: list):
+    """Salva notas no banco de dados (upsert por chave_acesso)."""
+    from sqlalchemy import select
+    from src.database.models import NFSeEmissao
+    from config.database import AsyncSessionLocal
+
+    async def _upsert():
+        async with AsyncSessionLocal() as session:
+            for nota in notas:
+                chave = nota.get('chave_acesso') or nota.get('numero')
+                if not chave or chave == 'N/A':
+                    continue
+                stmt = select(NFSeEmissao).where(NFSeEmissao.hash_transacao == chave)
+                result = await session.execute(stmt)
+                existing = result.scalar_one_or_none()
+                if existing:
+                    continue  # já existe, não duplica
+
+                cpf = str(nota.get('tomador_cpf', '') or '').replace('.', '').replace('-', '')
+                emissao = NFSeEmissao(
+                    hash_transacao=chave,
+                    numero_nfse=str(nota.get('numero', '') or ''),
+                    protocolo=chave,
+                    cpf_tomador=cpf[:11] if cpf else '00000000000',
+                    nome_tomador=str(nota.get('tomador_nome', '') or '')[:150],
+                    status='sucesso',
+                    url_nfse=nota.get('link_nfse'),
+                    valor_servico=nota.get('valor'),
+                    valor_iss=nota.get('iss'),
+                    usuario=st.session_state.get('username', 'admin'),
+                )
+                session.add(emissao)
+            await session.commit()
+
+    asyncio.run(_upsert())
+
+
+def _load_notas_do_db() -> list:
+    """Carrega todas as notas com sucesso do banco de dados."""
+    from sqlalchemy import select
+    from src.database.models import NFSeEmissao
+    from config.database import AsyncSessionLocal
+
+    async def _query():
+        async with AsyncSessionLocal() as session:
+            stmt = select(NFSeEmissao).where(
+                NFSeEmissao.status == 'sucesso'
+            ).order_by(NFSeEmissao.created_at.desc())
+            result = await session.execute(stmt)
+            rows = result.scalars().all()
+            return [
+                {
+                    'chave_acesso': r.hash_transacao,
+                    'numero': r.numero_nfse or 'N/A',
+                    'data_emissao': r.created_at.strftime("%d/%m/%Y %H:%M:%S") if r.created_at else 'N/A',
+                    'tomador_nome': r.nome_tomador,
+                    'tomador_cpf': r.cpf_tomador,
+                    'valor': float(r.valor_servico or 0),
+                    'iss': float(r.valor_iss or 0),
+                    'xml_path': None,
+                    'pdf_path': None,
+                    'link_nfse': r.url_nfse,
+                }
+                for r in rows
+            ]
+
+    return asyncio.run(_query())
 
 
 # ============================================================================
@@ -1546,13 +1629,12 @@ def main():
     # Inicializa estado da sessão
     init_session_state()
     
-    # Inicializa banco de dados (se necessário)
+    # Inicializa banco de dados (cria tabelas se não existirem)
     try:
-        # Como init_database é async, tentamos executar se possível
-        # Para simplificar, pulamos por enquanto - o banco será criado quando necessário
-        pass
+        asyncio.run(init_database())
+        app_logger.info("Banco de dados inicializado com sucesso")
     except Exception as e:
-        app_logger.warning(f"Banco de dados não inicializado: {e}")
+        app_logger.warning(f"Aviso ao inicializar banco de dados: {e}")
     
     # Verifica autenticação
     if not st.session_state.authenticated:
