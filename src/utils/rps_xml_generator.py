@@ -91,6 +91,9 @@ class RPSXMLGenerator:
         valor_fmt = _fmt(valor)
         aliquota_fmt = _fmt4(aliquota_iss)
 
+        # NBS deve ser inteiro (sem pontos) conforme XSD xs:integer
+        nbs_int = nbs.replace(".", "")
+
         xml = f"""<?xml version="1.0" encoding="UTF-8"?>
 <nfse>
   <nfse_teste>{nfse_teste}</nfse_teste>
@@ -128,7 +131,7 @@ class RPSXMLGenerator:
     <lista>
       <codigo_local_prestacao_servico>{CIDADE_SANTA_ROSA_TOM}</codigo_local_prestacao_servico>
       <codigo_item_lista_servico>{codigo_servico}</codigo_item_lista_servico>
-      <codigo_nbs>{nbs}</codigo_nbs>
+      <codigo_nbs>{nbs_int}</codigo_nbs>
       <descritivo>{descricao}</descritivo>
       <aliquota_item_lista_servico>{aliquota_fmt}</aliquota_item_lista_servico>
       <situacao_tributaria>00</situacao_tributaria>
