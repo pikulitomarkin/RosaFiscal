@@ -1188,7 +1188,7 @@ def render_emitted_nfse_list():
         return
     
     # Filtros
-    col1, col2, col3, col4, col5 = st.columns(5)
+    col1, col2, col3, col4, col5, col6 = st.columns(6)
     
     with col1:
         filtro_nome = st.text_input("🔍 Filtrar por Nome", placeholder="Digite o nome...")
@@ -1246,7 +1246,33 @@ def render_emitted_nfse_list():
     
     with col5:
         ordem = st.selectbox("📊 Ordenar por", ["Mais Recentes", "Mais Antigas", "Maior Valor", "Menor Valor"])
-    
+
+    with col6:
+        # Extrair dias disponíveis, filtrados pelo período selecionado
+        dias_disponiveis = set()
+        for nota in st.session_state.emitted_nfse:
+            try:
+                data_str = nota.get('data_emissao', '')
+                if data_str:
+                    partes = data_str.split()
+                    if partes:
+                        data_parte = partes[0]  # DD/MM/YYYY
+                        partes_data = data_parte.split('/')
+                        if len(partes_data) == 3:
+                            dia = partes_data[0]
+                            mes_ano = '/'.join(partes_data[1:])
+                            if filtro_periodo == "Todos" or mes_ano == filtro_periodo:
+                                dias_disponiveis.add(dia)
+            except:
+                pass
+
+        dias_ordenados = sorted(list(dias_disponiveis))
+        filtro_dia = st.selectbox(
+            "📅 Filtrar por Dia",
+            ["Todos"] + dias_ordenados,
+            help="Selecione o dia específico"
+        )
+
     st.markdown("---")
     
     # Filtrar e ordenar
@@ -1291,7 +1317,23 @@ def render_emitted_nfse_list():
             except:
                 pass
         nfse_list = nfse_filtradas
-    
+
+    # Filtrar por dia
+    if filtro_dia != "Todos":
+        nfse_filtradas = []
+        for n in nfse_list:
+            try:
+                data_str = n.get('data_emissao', '')
+                if data_str:
+                    partes = data_str.split()
+                    if partes:
+                        dia = partes[0].split('/')[0]
+                        if dia == filtro_dia:
+                            nfse_filtradas.append(n)
+            except:
+                pass
+        nfse_list = nfse_filtradas
+
     if ordem == "Mais Recentes":
         nfse_list = list(reversed(nfse_list))
     elif ordem == "Maior Valor":
