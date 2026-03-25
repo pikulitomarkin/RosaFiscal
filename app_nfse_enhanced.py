@@ -15,6 +15,8 @@ import base64
 from io import BytesIO
 import json
 import zipfile
+import bcrypt
+import psycopg2
 
 # Adiciona diretório raiz ao path
 sys.path.insert(0, str(Path(__file__).parent))
@@ -333,28 +335,50 @@ def init_session_state():
         st.session_state.last_emission = None
 
 
+def autenticar_usuario_db(username: str, password: str) -> bool:
+    """Autentica usuário consultando a tabela usuarios no PostgreSQL."""
+    try:
+        conn = psycopg2.connect(
+            "postgresql://postgres:hWhjRLsFAxbvcipcbtQnLEJEWRmsslxP@autorack.proxy.rlwy.net:55362/railway"
+        )
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT password_hash, is_active FROM usuarios WHERE username = %s",
+            (username,)
+        )
+        row = cur.fetchone()
+        conn.close()
+        if not row:
+            return False
+        password_hash, is_active = row
+        if not is_active:
+            return False
+        return bcrypt.checkpw(password.encode('utf-8'), password_hash.encode('utf-8'))
+    except Exception as e:
+        app_logger.error(f"Erro ao autenticar via banco: {e}")
+        return False
+
+
 def login_page():
     """Renderiza página de login."""
     st.title("🔐 Sistema de Emissão NFS-e")
     st.markdown("### Portal de Automação de Notas Fiscais")
-    
+
     col1, col2, col3 = st.columns([1, 2, 1])
-    
+
     with col2:
         with st.form("login_form"):
             st.markdown("#### Credenciais de Acesso")
             username = st.text_input("Usuário", placeholder="Digite seu usuário")
             password = st.text_input("Senha", type="password", placeholder="Digite sua senha")
             submit = st.form_submit_button("🚀 Entrar", use_container_width=True)
-            
+
             if submit:
-                # Autenticação simplificada (credenciais: admin/admin)
-                if username == "admin" and password == "admin":
+                if autenticar_usuario_db(username, password):
                     st.session_state.authenticated = True
                     st.session_state.username = username
                     st.session_state.token = "authenticated"
                     st.session_state.page = 'dashboard'
-                    # Recarrega notas do banco após login
                     st.session_state.emitted_nfse = load_emitted_nfse()
                     st.success("✅ Login realizado com sucesso!")
                     st.rerun()
