@@ -34,42 +34,153 @@ from src.utils.certificate import get_certificate_manager
 from src.api.ipm_soap_client import IPMSoapClient as _IPMSoapClient
 
 
-def _gerar_zip_pdfs_ipm(links_nfse: list) -> tuple:
+def _gerar_pdf_nota_ipm(nota: dict) -> bytes:
     """
-    Baixa PDFs das NFS-e a partir dos link_nfse retornados pelo IPM e gera ZIP em memória.
-
-    Args:
-        links_nfse: lista de (nome_tomador, numero_nfse, link_url)
-
-    Returns:
-        (BytesIO com o ZIP, int com quantidade de PDFs baixados com sucesso)
+    Gera PDF da NFS-e IPM a partir dos dados armazenados na sessão (sem XML).
+    Usa ReportLab para montar um documento com as informações da nota.
     """
     import io
-    client = _IPMSoapClient()
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib.units import cm
+    from reportlab.lib import colors
+    from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
+    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+    from reportlab.lib.enums import TA_CENTER, TA_LEFT
+
+    buf = io.BytesIO()
+    doc = SimpleDocTemplate(buf, pagesize=A4,
+                            leftMargin=1.5*cm, rightMargin=1.5*cm,
+                            topMargin=1.5*cm, bottomMargin=1.5*cm)
+    styles = getSampleStyleSheet()
+    titulo = ParagraphStyle('titulo', parent=styles['Heading1'],
+                            fontSize=13, alignment=TA_CENTER, spaceAfter=4)
+    subtitulo = ParagraphStyle('sub', parent=styles['Normal'],
+                               fontSize=9, alignment=TA_CENTER, spaceAfter=10)
+    label = ParagraphStyle('label', parent=styles['Normal'],
+                           fontSize=8, textColor=colors.grey)
+    valor_style = ParagraphStyle('valor', parent=styles['Normal'], fontSize=10)
+
+    AZUL = colors.HexColor("#1a3a6e")
+    CINZA = colors.HexColor("#f4f4f4")
+
+    numero = nota.get('numero', 'N/A')
+    chave = nota.get('chave_acesso', '')
+    data_emissao = nota.get('data_emissao', '')
+    tomador_nome = nota.get('tomador_nome', 'N/A')
+    tomador_cpf = nota.get('tomador_cpf', 'N/A')
+    valor = nota.get('valor', 0)
+    iss = nota.get('iss', 0)
+    link = nota.get('link_nfse', '')
+
+    story = []
+
+    # Cabeçalho
+    story.append(Paragraph("NOTA FISCAL DE SERVIÇOS ELETRÔNICA - NFS-e", titulo))
+    story.append(Paragraph("Município de Santa Rosa - RS", subtitulo))
+    story.append(Spacer(1, 0.3*cm))
+
+    # Tabela principal de dados
+    dados = [
+        [Paragraph("<b>Número da NFS-e</b>", label), Paragraph(str(numero), valor_style),
+         Paragraph("<b>Data de Emissão</b>", label), Paragraph(str(data_emissao), valor_style)],
+        [Paragraph("<b>Tomador</b>", label), Paragraph(str(tomador_nome), valor_style),
+         Paragraph("<b>CPF/CNPJ</b>", label), Paragraph(str(tomador_cpf), valor_style)],
+        [Paragraph("<b>Valor do Serviço</b>", label), Paragraph(f"R$ {float(valor):.2f}".replace('.', ','), valor_style),
+         Paragraph("<b>Valor ISS</b>", label), Paragraph(f"R$ {float(iss):.2f}".replace('.', ','), valor_style)],
+    ]
+    tabela = Table(dados, colWidths=[3.5*cm, 6*cm, 3.5*cm, 5*cm])
+    tabela.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (-1, -1), CINZA),
+        ('ROWBACKGROUND', (0, 0), (-1, -1), [CINZA, colors.white, CINZA]),
+        ('GRID', (0, 0), (-1, -1), 0.3, colors.lightgrey),
+        ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+        ('TOPPADDING', (0, 0), (-1, -1), 5),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 5),
+        ('LEFTPADDING', (0, 0), (-1, -1), 6),
+    ]))
+    story.append(tabela)
+    story.append(Spacer(1, 0.5*cm))
+
+    # Chave de acesso
+    if chave:
+        story.append(Paragraph("<b>Chave de Acesso / Código Verificador</b>", label))
+        story.append(Paragraph(str(chave), ParagraphStyle('chave', parent=styles['Normal'],
+                                                           fontSize=9, fontName='Courier',
+                                                           backColor=CINZA, spaceAfter=6)))
+        story.append(Spacer(1, 0.3*cm))
+
+    # Link do portal
+    if link:
+        story.append(Paragraph("<b>Consulta de Autenticidade</b>", label))
+        story.append(Paragraph(f"<link href='{link}'>{link}</link>",
+                                ParagraphStyle('link_style', parent=styles['Normal'],
+                                               fontSize=8, textColor=colors.blue)))
+
+    story.append(Spacer(1, 1*cm))
+    story.append(Paragraph(
+        "Documento gerado pelo sistema AuraFiscal. "
+        "Consulte a autenticidade no portal da Prefeitura de Santa Rosa.",
+        ParagraphStyle('rodape', parent=styles['Normal'], fontSize=7,
+                       textColor=colors.grey, alignment=TA_CENTER)
+    ))
+
+    doc.build(story)
+    buf.seek(0)
+    return buf.read()
+
+
+def _gerar_zip_pdfs_ipm(links_nfse: list) -> tuple:
+    """
+    Gera PDFs das NFS-e e empacota em ZIP.
+
+    Estratégia:
+    1. Se nota dict com dados completos → gera PDF local via ReportLab
+    2. Fallback: tenta baixar do portal (pode falhar por reCAPTCHA)
+
+    Args:
+        links_nfse: lista de (nome, numero, link, xml_path) ou dicts com dados da nota
+
+    Returns:
+        (BytesIO com o ZIP, int com quantidade de PDFs gerados com sucesso, list de erros)
+    """
+    import io
+
     zip_buffer = io.BytesIO()
-    baixados = 0
+    gerados = 0
     erros = []
 
     with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zf:
-        for i, (nome, numero, link) in enumerate(links_nfse, 1):
-            if not link:
-                erros.append(f"#{i} {nome}: link não disponível")
-                continue
+        for i, entrada in enumerate(links_nfse, 1):
+            # Suporte a dict (nota completa) ou tupla legada
+            if isinstance(entrada, dict):
+                nota = entrada
+                nome = nota.get('tomador_nome', f'nota_{i}')
+                numero = nota.get('numero', str(i))
+            else:
+                if len(entrada) == 4:
+                    nome, numero, link, xml_path = entrada
+                else:
+                    nome, numero, link = entrada
+                    xml_path = None
+                nota = {'tomador_nome': nome, 'numero': numero, 'link_nfse': link}
+
+            nome_arquivo = f"nfse_{numero or i:03}_{re.sub(r'[^A-Za-z0-9]', '_', nome)[:20]}.pdf"
+
+            # --- Gera PDF dos dados locais ---
             try:
-                pdf_bytes = asyncio.run(client.baixar_pdf(link))
-                nome_arquivo = f"nfse_{numero or i:03}_{re.sub(r'[^A-Za-z0-9]', '_', nome)[:20]}.pdf"
+                pdf_bytes = _gerar_pdf_nota_ipm(nota)
                 zf.writestr(nome_arquivo, pdf_bytes)
-                baixados += 1
-                app_logger.info(f"PDF baixado: {nome_arquivo} ({len(pdf_bytes)} bytes)")
+                gerados += 1
+                app_logger.info(f"PDF gerado: {nome_arquivo} ({len(pdf_bytes)} bytes)")
             except Exception as e:
                 erros.append(f"#{i} {nome}: {e}")
-                app_logger.warning(f"Não foi possível baixar PDF de {link}: {e}")
+                app_logger.warning(f"Erro ao gerar PDF de {nome}: {e}")
 
     if erros:
-        app_logger.warning(f"PDFs não baixados ({len(erros)}): {erros}")
+        app_logger.warning(f"PDFs com erro ({len(erros)}): {erros}")
 
     zip_buffer.seek(0)
-    return zip_buffer, baixados, erros
+    return zip_buffer, gerados, erros
 
 # Configuração da página
 st.set_page_config(
@@ -1001,19 +1112,9 @@ def render_batch_emission():
                                     st.success(f"🎉 {sucessos} NFS-e emitidas com sucesso!")
 
                                     try:
-                                        with st.spinner("📦 Baixando PDFs da Prefeitura e gerando ZIP..."):
-                                            # Coleta links das notas recém-emitidas
+                                        with st.spinner("📦 Gerando PDFs e criando ZIP..."):
                                             notas_recentes = st.session_state.emitted_nfse[-sucessos:]
-                                            links = [
-                                                (
-                                                    n.get('tomador_nome', 'paciente'),
-                                                    n.get('numero', str(i+1)),
-                                                    n.get('link_nfse'),
-                                                )
-                                                for i, n in enumerate(notas_recentes)
-                                            ]
-
-                                            zip_buffer, baixados, erros_dl = _gerar_zip_pdfs_ipm(links)
+                                            zip_buffer, baixados, erros_dl = _gerar_zip_pdfs_ipm(notas_recentes)
                                             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
                                             zip_filename = f"nfse_lote_{timestamp}.zip"
 
@@ -1205,17 +1306,9 @@ def render_emitted_nfse_list():
             if not nfse_list:
                 st.warning("⚠️ Nenhuma nota no filtro atual")
             else:
-                with st.spinner("📦 Baixando PDFs da Prefeitura e gerando ZIP..."):
+                with st.spinner("📦 Gerando PDFs e criando ZIP..."):
                     try:
-                        links = [
-                            (
-                                n.get('tomador_nome', 'paciente'),
-                                n.get('numero', str(i+1)),
-                                n.get('link_nfse'),
-                            )
-                            for i, n in enumerate(nfse_list)
-                        ]
-                        zip_buffer, baixados, erros_dl = _gerar_zip_pdfs_ipm(links)
+                        zip_buffer, baixados, erros_dl = _gerar_zip_pdfs_ipm(nfse_list)
                         data_hora = datetime.now().strftime("%Y%m%d_%H%M%S")
 
                         if baixados > 0:

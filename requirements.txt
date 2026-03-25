@@ -40,6 +40,9 @@ tqdm==4.66.1
 # Logging
 loguru==0.7.2
 
+# Browser Automation
+playwright==1.44.0  # Para download de PDFs com reCAPTCHA
+
 # Testing (opcional)
 pytest==7.4.3
 pytest-asyncio==0.21.1

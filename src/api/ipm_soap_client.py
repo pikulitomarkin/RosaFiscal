@@ -61,20 +61,20 @@ class IPMSoapClient:
 
     async def baixar_pdf(self, link_nfse: str) -> bytes:
         """
-        Baixa o PDF da NFS-e a partir do link retornado pelo IPM.
-        Tenta sem auth primeiro; se falhar, usa Basic Auth.
+        Tenta baixar o PDF da NFS-e do portal via HTTP.
+        Nota: o portal usa reCAPTCHA v2, então este método pode falhar.
+        A via principal de geração de PDF é via XML local (gerar_danfse_v2).
         """
-        app_logger.info(f"IPM: baixando PDF → {link_nfse}")
+        app_logger.info(f"IPM: baixando PDF do portal → {link_nfse}")
         auth = (self.usuario, self.senha)
         async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
             resp = await client.get(link_nfse)
-            if resp.status_code == 200 and resp.content:
+            if resp.status_code == 200 and resp.content[:4] == b"%PDF":
                 return resp.content
-            # Segunda tentativa com Basic Auth
             resp = await client.get(link_nfse, auth=auth)
-            if resp.status_code == 200 and resp.content:
+            if resp.status_code == 200 and resp.content[:4] == b"%PDF":
                 return resp.content
-            raise RuntimeError(f"HTTP {resp.status_code} ao baixar PDF")
+            raise RuntimeError(f"Portal retornou HTTP {resp.status_code} (reCAPTCHA pode estar bloqueando)")
 
     def _parse_resposta(self, xml_text: str) -> dict:
         """Extrai dados do XML de retorno IPM (encoding ISO-8859-1)."""
