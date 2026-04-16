@@ -338,6 +338,10 @@ class NFSeService:
 
             numero_rps = idx + 1
             try:
+                # Valor: usa o fixo do config se definido (> 0), senão usa o extraído do PDF
+                valor_fixo_ipm = config_servico.get("valor")
+                valor_ipm = float(valor_fixo_ipm) if valor_fixo_ipm else float(registro.get("valor") or 0)
+
                 rps_xml = rps_gen.gerar_enviar_lote_rps_sincrono(
                     cnpj_prestador=prestador["cnpj"],
                     inscricao_municipal=prestador["inscricao_municipal"],
@@ -347,7 +351,7 @@ class NFSeService:
                     cpf_tomador=re.sub(r"\D", "", registro.get("cpf", "")),
                     nome_tomador=registro.get("nome", ""),
                     descricao=config_servico.get("descricao", "CONSULTA MEDICA"),
-                    valor=float(config_servico.get("valor", 0)),
+                    valor=valor_ipm,
                     aliquota_iss=float(config_servico.get("aliquota_iss", 2.6011)),
                     codigo_servico=config_servico.get("item_lista", "40101"),
                     nbs=config_servico.get("nbs", "1.2301.22.00"),
@@ -496,10 +500,13 @@ class NFSeService:
             nome=registro['nome']
         )
         
-        # Serviço
+        # Serviço — valor: usa o fixo do config se definido (> 0), senão usa o extraído do PDF
+        valor_fixo = config_servico.get('valor')
+        valor_final = float(valor_fixo) if valor_fixo else float(registro.get('valor') or 100.00)
+
         servico = Servico(
             descricao=config_servico.get('descricao', 'Prestação de serviços'),
-            valor_servico=Decimal(str(config_servico.get('valor', 100.00))),
+            valor_servico=Decimal(str(valor_final)),
             aliquota_iss=Decimal(str(config_servico.get('aliquota_iss', 2.0))),
             item_lista_servico=config_servico.get('item_lista', '1.09'),
             discriminacao=config_servico.get('discriminacao', None)

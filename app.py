@@ -267,7 +267,8 @@ def render_new_emission():
                     with st.expander("👁️ Visualizar Dados Extraídos"):
                         import pandas as pd
                         df = pd.DataFrame(valid_records)
-                        st.dataframe(df[['nome', 'cpf', 'hash']], use_container_width=True)
+                        colunas = ['nome', 'cpf', 'hash', 'valor'] if 'valor' in df.columns else ['nome', 'cpf', 'hash']
+                        st.dataframe(df[colunas], use_container_width=True)
                     
                     # Configuração do serviço
                     st.markdown("### 3️⃣ Configuração do Serviço")
@@ -277,10 +278,11 @@ def render_new_emission():
                         
                         with col1:
                             valor = st.number_input(
-                                "Valor do Serviço (R$)",
-                                min_value=0.01,
-                                value=100.00,
-                                step=10.00
+                                "Valor Fixo (R$)",
+                                min_value=0.0,
+                                value=0.0,
+                                step=10.00,
+                                help="Deixe 0 para usar o valor extraído do PDF de cada registro. Qualquer valor > 0 será aplicado a todas as notas do lote."
                             )
                             
                             aliquota_iss = st.number_input(
@@ -325,7 +327,7 @@ def render_new_emission():
                             process_batch(
                                 valid_records,
                                 {
-                                    'valor': valor,
+                                    'valor': valor if valor > 0 else None,
                                     'aliquota_iss': aliquota_iss,
                                     'item_lista': item_lista,
                                     'descricao': descricao,

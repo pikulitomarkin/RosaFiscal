@@ -766,12 +766,12 @@ def render_batch_emission():
                         
                         with col1:
                             valor_servico = st.number_input(
-                                "💰 Valor Padrão/Fallback (R$) *",
-                                min_value=0.01,
-                                value=89.00,
+                                "💰 Valor Fixo (R$)",
+                                min_value=0.0,
+                                value=0.0,
                                 step=1.00,
                                 format="%.2f",
-                                help="Usado apenas quando o PDF não contiver valor. Se o PDF tiver valor, ele será prioritário."
+                                help="Deixe 0 para usar o valor extraído do PDF de cada registro. Qualquer valor > 0 será aplicado a todas as notas do lote."
                             )
                             
                             aliquota_iss = st.number_input(
@@ -860,7 +860,7 @@ def render_batch_emission():
                                 
                                 # Preparar dados do serviço
                                 servico = {
-                                    'valor': valor_servico,
+                                    'valor': valor_servico if valor_servico > 0 else None,
                                     'aliquota_iss': aliquota_iss,
                                     'item_lista': item_lista,
                                     'descricao': descricao_servico,
