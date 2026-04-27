@@ -995,9 +995,10 @@ def render_batch_emission():
                                             else:
                                                 discriminacao_com_hash = f"Hash do Paciente: {hash_paciente}"
                                         
-                                        # Serviço — usa o valor do PDF; se não disponível, usa o valor padrão do formulário
-                                        valor_nota = record.get('valor') or valor_servico
-                                        app_logger.info(f"[{idx+1}] Criando objeto Servico (valor={valor_nota}, fonte={'PDF' if record.get('valor') else 'formulário'})...")
+                                        # Serviço — valor fixo tem prioridade; se 0/ausente, usa o valor extraído do PDF
+                                        valor_nota = valor_servico if valor_servico > 0 else (record.get('valor') or 0)
+                                        fonte_valor = 'formulário (fixo)' if valor_servico > 0 else ('PDF' if record.get('valor') else 'sem valor')
+                                        app_logger.info(f"[{idx+1}] Criando objeto Servico (valor={valor_nota}, fonte={fonte_valor})...")
                                         servico_obj = Servico(
                                             valor_servico=valor_nota,
                                             aliquota_iss=aliquota_iss,
