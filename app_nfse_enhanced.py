@@ -741,6 +741,7 @@ def render_batch_emission():
                         for r in valid_records:
                             valor_pdf = r.get('valor')
                             display_data.append({
+                                'Hash': r.get('hash', 'N/A'),
                                 'Nome': r.get('nome', 'N/A'),
                                 'CPF': r.get('cpf_formatado', r.get('cpf', 'N/A')),
                                 'Telefone': r.get('telefone', 'Não informado'),
@@ -750,7 +751,22 @@ def render_batch_emission():
                             })
                         
                         df = pd.DataFrame(display_data)
-                        st.dataframe(df, use_container_width=True)
+                        # Hash largo: exibido inteiro para conferência (é o que vai na descrição da NFS-e)
+                        st.dataframe(
+                            df,
+                            use_container_width=True,
+                            column_config={
+                                'Hash': st.column_config.TextColumn('Hash', width='large')
+                            }
+                        )
+                        
+                        hashes_incompletos = [r for r in valid_records if not r.get('hash_completo', True)]
+                        if hashes_incompletos:
+                            st.error(
+                                f"⚠️ **{len(hashes_incompletos)} registro(s) com hash incompleto no PDF.** "
+                                "Confira a coluna Hash antes de emitir: "
+                                + ", ".join(r.get('nome', 'N/A') for r in hashes_incompletos[:5])
+                            )
                         
                         registros_sem_valor = sum(1 for r in valid_records if not r.get('valor'))
                         if registros_sem_valor > 0:
