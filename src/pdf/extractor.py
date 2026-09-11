@@ -113,8 +113,11 @@ class PDFDataExtractor:
                 break
             tokens.append(token)
 
-        # Descarta sobras de e-mail no fim (token de 1 letra ou sufixo de domínio)
-        while tokens and (len(tokens[-1]) == 1 or tokens[-1] in cls.SUFIXOS_EMAIL):
+        # Descarta sobras de e-mail no fim — sempre minúsculas ("...@gmail.co" + "m"),
+        # o que preserva iniciais do nome, que vêm em maiúscula ("Ana Carolina B")
+        while tokens and tokens[-1].islower() and (
+            len(tokens[-1]) == 1 or tokens[-1] in cls.SUFIXOS_EMAIL
+        ):
             tokens.pop()
 
         return ' '.join(tokens)
@@ -384,7 +387,9 @@ class PDFDataExtractor:
         nome = "Nome não encontrado"
         if hash_pos >= 0 and cpf_pos > hash_pos:
             trecho = text[hash_pos + len(hash_na_linha):cpf_pos].strip()
-            nome_palavras = [p for p in trecho.split() if not p.isdigit() and len(p) > 1]
+            # Mantém iniciais de 1 letra ("Ana Carolina B Felizatti", "GERSON A LIMA"):
+            # entre o hash e o CPF só existe a coluna Nome, então só sobra numérica é descartada
+            nome_palavras = [p for p in trecho.split() if not p.isdigit()]
             if nome_palavras:
                 nome = ' '.join(nome_palavras)
 
